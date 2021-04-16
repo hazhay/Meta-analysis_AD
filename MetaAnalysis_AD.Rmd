@@ -1,0 +1,2426 @@
+---
+title: "MetaAnalysis"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+###### useful packages 
+#install.packages("ggplot2")
+#install.packages("ggforce")
+#install.packages("VennDiagram")
+#install.packages("ggpubr")
+#install.packages("dplyr")
+#install.packages("reshape2")
+#install.packages("meta")
+#install.packages("gridExtra")
+#install.packages("pheatmap")
+#install.packages("factoextra")
+#install.packages("BiocManager")
+#BiocManager::install("piano")
+#BiocManager::install("pathview")
+#browseVignettes("pathview")
+
+library(pathview)
+library(pheatmap)
+library(factoextra)
+library(ggforce)
+library(gridExtra)
+library(ggplot2)
+library(VennDiagram)
+library(dplyr)
+library(reshape2)
+library(meta)
+library(metafor)
+library(piano)
+library(ggpubr)
+```
+
+# Pre-processing 
+In here, we will check the quality of the data.
+1. uniprot accession number is used as the common identifier between datasets.   
+2. find missing values per disease group. data_NAs is used to create a bar graph with 0, 1 and more than 1 NA per group. 20% NA is allowed - merge the filtered AD_df and C_df together. 
+3. log2 conversions, median-centered and scale. (input df for meta-analysis)
+4. melt the data (used for PCA) 
+5. generate boxplots.
+
+## Individual datasets
+### Dataset1, Haytural OML
+```{r}
+data1 = read.delim("../data/Haytural_OML.txt")
+n_occur = data.frame(table(data1$UniprotAccession))
+#Identifier, Uniprot accession no, will be the rowname. Afterwards, remove unnecessary columns like uniprot accession, protein name and description.
+row.names(data1)=data1$UniprotAccession
+data1 = data1[,-c(1:4)]
+
+#finding missing values 
+data1C = data1[,1:5]
+data1C_rowNA = rowSums(is.na(data1C))
+rowNA_0 = which(data1C_rowNA==0)
+rowNA_1 = which(data1C_rowNA==1)
+rowNA_2 = which(data1C_rowNA==2)
+rowNA_more = which(data1C_rowNA > 2)
+data1C_filtered=data1C[which(data1C_rowNA < 2),]
+
+data1AD = data1[,6:10]
+data1AD_rowNA = rowSums(is.na(data1AD))
+rowNA_AD_0 = which(data1AD_rowNA==0)
+rowNA_AD_1 = which(data1AD_rowNA==1)
+rowNA_AD_2 = which(data1AD_rowNA==2)
+rowNA_AD_more = which(data1AD_rowNA > 2)
+data1AD_filtered=data1AD[which(data1AD_rowNA < 2),]
+
+data1 = merge(data1C_filtered, data1AD_filtered, by="row.names")
+row.names(data1) = data1$Row.names
+data1 = data1[,-c(1:1)]
+
+#create a new df in which you will collect NA information from all selected studies. Length here takes the length of the values written in the environment for each NA computed. 
+data_NAs = data.frame("Dataset" = c("Data1_C"), "NA0" = length(rowNA_0), "NA1" = length(rowNA_1), "NA2" = length(rowNA_2), "NAmore2" = length(rowNA_more))
+
+#add data for AD to the df data_NAs
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data1_AD"), "NA0" = length(rowNA_AD_0), "NA1" = length(rowNA_AD_1), "NA2" = length(rowNA_AD_2), "NAmore2" = length(rowNA_AD_more)) ) 
+
+#Filtered data (cut-off 1 NA (20%) per group) - save as a text file automatically in wd 
+write.table(data1, file = "data1_HayturalOML_filtered.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+####START FROM HERE WITH FILTERED DATA! 
+#data1 = read.delim("../data/filtered_NA/data1_HayturalOML_filtered.txt", na.strings = "NA")
+
+#log2 conversion,  
+data1_log2 = log2(data1)
+data1_log2_med = apply(data1_log2, 2, FUN = median, na.rm = TRUE)
+data1_log2 = as.data.frame(scale(data1_log2, center = data1_log2_med, scale = TRUE))
+
+#Formatted data (cut-off 1 NA per group, log2, scaled) 
+write.table(data1_log2, file = "../data/formatted_wide_log2/Metadata_input/data1_HayturalOML_formatted.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#melt the df for boxplot
+data1_log2$protein=row.names(data1_log2)
+melted_data1_log2 = melt(data1_log2, id.vars = ('protein'), value.name = 'intensities', variable.name = 'sample')
+melted_data1_log2$group = gsub('.$','',melted_data1_log2$sample)
+melted_data1_log2$dataset = c("Data1")
+melted_data1_log2$brain.region = c("Temporal.lobe")
+melted_data1_log2 = melted_data1_log2[,c(5,2,1,3,4,6)]
+melted_data1_log2$labeling = c("Yes")
+melted_data1_log2$lysis = c("SDS")
+
+#Formatted data (cut-off 1 NA per group, log2, median, scaled, melted)
+write.table(melted_data1_log2, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data1melted_HayturalOML.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#Generate a boxplot.
+tiff(file = "Boxplot_data1_f.tiff", units="in", width=10, height=6, res=300, compression = 'lzw')
+ggplot(data = melted_data1_log2, aes(x=sample, y=intensities, fill=group)) +   
+  geom_boxplot(notch = TRUE)
+dev.off()
+```
+
+### Dataset2, LTSSW FC  
+```{r}
+data2 = read.delim("../data/LTSSW_FC.txt")
+row.names(data2)=data2$Uniprot.accession
+data2 = data2[,-c(1:2)]
+
+#check for missing values (is.na).
+which(is.na(data2))
+#missing values per each sample.
+data2_colNAs=colSums(is.na(data2))
+#missing proteins 
+data2_rowNAs = rowSums(is.na(data2))
+
+data2C = data2[,1:5]
+data2C_rowNA = rowSums(is.na(data2C))
+#EDITED. careful. the result of data2_C_rowNA is not a string. So it should be tested against == 0 and not against =="0"
+rowNA_0 = which(data2C_rowNA==0)
+rowNA_1 = which(data2C_rowNA==1)
+rowNA_2 = which(data2C_rowNA==2)
+rowNA_more = which(data2C_rowNA > 2)
+data2C_filtered=data2C[which(data2C_rowNA < 2),]
+
+data2AD = data2[,6:10]
+data2AD_rowNA = rowSums(is.na(data2AD))
+rowNA_AD_0 = which(data2AD_rowNA==0)
+rowNA_AD_1 = which(data2AD_rowNA==1)
+rowNA_AD_2 = which(data2AD_rowNA==2)
+rowNA_AD_more = which(data2AD_rowNA > 2)
+data2AD_filtered=data2AD[which(data2AD_rowNA < 2),]
+
+#Add NAs from data2 to the df data_NAs
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data2_C"), "NA0" = length(rowNA_0), "NA1" = length(rowNA_1), "NA2" = length(rowNA_2), "NAmore2" = length(rowNA_more)) ) 
+
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data2_AD"), "NA0" = length(rowNA_AD_0), "NA1" = length(rowNA_AD_1), "NA2" = length(rowNA_AD_2), "NAmore2" = length(rowNA_AD_more)) ) 
+
+#merge filtered C and AD 
+data2 = merge(data2C_filtered, data2AD_filtered, by="row.names")
+row.names(data2) = data2$Row.names
+data2 = data2[, -c(1:1)]
+
+#Filtered data (cut-off 1 NA (20%) per group) - save as a text file automatically in wd 
+write.table(data2, file = "data2_LTSSWFC_filtered.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+####START FROM HERE WITH FILTERED DATA! 
+#data2 = read.delim("../data/filtered_NA/data2_LTSSWFC_filtered.txt")
+
+#change column names! 
+names(data2)[4] = paste("C4")
+names(data2)[5] = paste("C5")
+names(data2)[9] = paste("AD4")
+names(data2)[10] = paste("AD5")
+
+#log2 conversion, calculate FC 
+data2_log2 = log2(data2)
+data2_log2_med = apply(data2_log2, 2, FUN = median, na.rm = TRUE)
+data2_log2 = as.data.frame(scale(data2_log2, center = data2_log2_med, scale = TRUE))
+
+#Formatted data (cut-off 1 NA per group, log2, scaled) - save as a text file automatically in wd 
+write.table(data2_log2, file = "../data/formatted_wide_log2/Metadata_input/data2_LTSSWFC_formatted.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#melt the df for boxplot 
+data2_log2$protein=row.names(data2_log2)
+melted_data2_log2 = melt(data2_log2, id.vars = ('protein'), value.name = 'intensities', variable.name = 'sample')
+melted_data2_log2$group = gsub('.$','',melted_data2_log2$sample)
+melted_data2_log2$dataset = c("Data2")
+melted_data2_log2$brain.region = c("Frontal.lobe")
+#order: dataset, sample, protein, intensities, group, brain region, batch
+melted_data2_log2 = melted_data2_log2[,c(5,2,1,3,4,6)]
+melted_data2_log2$labeling = c("Yes")
+melted_data2_log2$lysis = c("Urea")
+
+#Formatted data (cut-off 1 NA per group, log2, median, scaled, melted)
+write.table(melted_data2_log2, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data2melted_LTSSWFC.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#Generate a boxplot.
+tiff(file = "Boxplot_data2_f.tiff", units="in", width=10, height=6, res=300, compression = 'lzw')
+ggplot(data = melted_data2_log2, aes(x=sample, y=intensities, fill=group)) +   
+  geom_boxplot(notch = TRUE)
+dev.off()
+```
+
+###Dataset3, LTSSW HIP
+```{r}
+data3 = read.delim("../data/LTSSW_HIP.txt")
+row.names(data3)=data3$Uniprot.Accession
+data3 = data3[,-c(1:2)]
+
+#check for missing values (is.na). 
+which(is.na(data3))
+data3_rowNAs = rowSums(is.na(data3))
+data3_colNAs=colSums(is.na(data3))
+
+data3C = data3[,1:5]
+data3C_rowNA = rowSums(is.na(data3C))
+rowNA_0 = which(data3C_rowNA==0)
+rowNA_1 = which(data3C_rowNA==1)
+rowNA_2 = which(data3C_rowNA==2)
+rowNA_more = which(data3C_rowNA > 2)
+data3C_filtered=data3C[which(data3C_rowNA < 2),]
+
+data3AD = data3[,6:10]
+data3AD_rowNA = rowSums(is.na(data3AD))
+rowNA_AD_0 = which(data3AD_rowNA==0)
+rowNA_AD_1 = which(data3AD_rowNA==1)
+rowNA_AD_2 = which(data3AD_rowNA==2)
+rowNA_AD_more = which(data3AD_rowNA > 2)
+data3AD_filtered=data3AD[which(data3AD_rowNA < 2),]
+
+# add C and AD NA info to the df data_NAs
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data3_C"), "NA0" = length(rowNA_0), "NA1" = length(rowNA_1), "NA2" = length(rowNA_2), "NAmore2" = length(rowNA_more)) ) 
+
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data3_AD"), "NA0" = length(rowNA_AD_0), "NA1" = length(rowNA_AD_1), "NA2" = length(rowNA_AD_2), "NAmore2" = length(rowNA_AD_more)) ) 
+
+#merge filtered C and AD df
+data3 = merge(data3C_filtered, data3AD_filtered, by = "row.names")
+row.names(data3) = data3$Row.names
+data3 = data3[,-c(1:1)]
+
+#double-check how many NAs 
+data3_log2_rowNA = rowSums(is.na(data3_log2))
+data3_log2_colNAs=colSums(is.na(data3_log2))
+
+#Filtered data (cut-off 1 NA (20%) per group) - save as a text file automatically in wd 
+write.table(data3, file = "data3_LTSSWHIP_filtered.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+####START FROM HERE WITH FILTERED DATA! 
+#data3 = read.delim("../data/filtered_NA/data3_LTSSWHIP_filtered.txt")
+
+#change column names! 
+names(data3)[4] = paste("C4")
+names(data3)[5] = paste("C5")
+names(data3)[9] = paste("AD4")
+names(data3)[10] = paste("AD5")
+
+#log2 conversion
+data3_log2 = log2(data3)
+data3_log2_med = apply(data3_log2, 2, FUN = median, na.rm = TRUE)
+data3_log2 = as.data.frame(scale(data3_log2, center = data3_log2_med, scale = TRUE))
+
+#Formatted data (cut-off 1 NA per group,NA imputation, log2, scaled) - save as a text file automatically in wd 
+write.table(data3_log2, file = "../data/formatted_wide_log2/Metadata_input/data3_LTSSWHIP_formatted.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#melt the df for boxplot
+data3_log2$protein=row.names(data3_log2)
+melted_data3_log2 = melt(data3_log2, id.vars = ('protein'), value.name = 'intensities', variable.name = 'sample')
+melted_data3_log2$group = gsub('.$','',melted_data3_log2$sample)
+melted_data3_log2$dataset = c("Data3")
+melted_data3_log2$brain.region = c("Temporal.lobe")
+#order: dataset, sample, protein, intensities, group, brain region, batch
+melted_data3_log2 = melted_data3_log2[,c(5,2,1,3,4,6)]
+melted_data3_log2$labeling = c("Yes")
+melted_data3_log2$lysis = c("Urea")
+
+#Formatted data (cut-off 1 NA per group, log2, median, scaled, melted)
+write.table(melted_data3_log2, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data3melted_LTSSWHIP.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#Generate a boxplot.
+tiff(file = "Boxplot_data3_f.tiff", units="in", width=10, height=6, res=300, compression = 'lzw')
+ggplot(data = melted_data3_log2, aes(x=sample, y=intensities, fill=group)) +   
+  geom_boxplot(notch = TRUE)
+dev.off()
+```
+
+### Dataset4, Bereczki BA9 (FC)
+```{r}
+data4 = read.delim("../data/Bereczki_BA9.txt", na.strings = "#VALUE!")
+row.names(data4)=data4$Uniprot.Accession
+data4 = data4[,-c(1:3)]
+
+#check for missing values (is.na).
+data4_colNAs=colSums(is.na(data4))
+
+data4C = data4[,1:8]
+data4C_rowNA = rowSums(is.na(data4C))
+rowNA_0 = which(data4C_rowNA==0)
+rowNA_1 = which(data4C_rowNA==1)
+rowNA_2 = which(data4C_rowNA==2)
+rowNA_more = which(data4C_rowNA > 2)
+data4C_filtered=data4C[which(data4C_rowNA < 2),]
+
+data4AD = data4[,9:17]
+data4AD_rowNA = rowSums(is.na(data4AD))
+rowNA_AD_0 = which(data4AD_rowNA==0)
+rowNA_AD_1 = which(data4AD_rowNA==1)
+rowNA_AD_2 = which(data4AD_rowNA==2)
+rowNA_AD_more = which(data4AD_rowNA > 2)
+data4AD_filtered=data4AD[which(data4AD_rowNA < 2),]
+
+#merge filtered C and AD df
+data4 = merge(data4C_filtered, data4AD_filtered, by = "row.names")
+row.names(data4) = data4$Row.names
+data4 = data4[,-c(1:1)]
+
+# add C and AD NA info to the df data_NAs
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data4_C"), "NA0" = length(rowNA_0), "NA1" = length(rowNA_1), "NA2" = length(rowNA_2), "NAmore2" = length(rowNA_more)) ) 
+
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data4_AD"), "NA0" = length(rowNA_AD_0), "NA1" = length(rowNA_AD_1), "NA2" = length(rowNA_AD_2), "NAmore2" = length(rowNA_AD_more)) ) 
+
+#Filtered data (cut-off 1 NA (20%) per group) - save as a text file automatically in wd 
+write.table(data4, file = "data4_BereczkiBA9_filtered.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+####START FROM HERE WITH FILTERED DATA! 
+#data4 = read.delim("../data/filtered_NA/data4_BereczkiBA9_filtered.txt")
+
+#log2 conversion
+data4_log2 = log2(data4)
+data4_log2_med = apply(data4_log2, 2, FUN = median, na.rm = TRUE)
+data4_log2 = as.data.frame(scale(data4_log2, center = data4_log2_med, scale = TRUE))
+
+#Formatted data (cut-off 1 NA per group log2, scaled) - save as a text file automatically in wd 
+write.table(data4_log2, file = "../data/formatted_wide_log2/Metadata_input/data4_BereczkiBA9_formatted.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#melt the df for boxplot
+data4_log2$protein=row.names(data4_log2)
+melted_data4_log2 = melt(data4_log2, id.vars = ('protein'), value.name = 'intensities', variable.name = 'sample')
+melted_data4_log2$group = gsub('.$','',melted_data4_log2$sample)
+melted_data4_log2$dataset = c("Data4")
+melted_data4_log2$brain.region = c("Frontal.lobe")
+#order: dataset, sample, protein, intensities, group, brain region, batch
+melted_data4_log2 = melted_data4_log2[,c(5,2,1,3,4,6)]
+melted_data4_log2$labeling = c("Yes")
+melted_data4_log2$lysis = c("SDS")
+
+#Formatted data (cut-off 1 NA per group, log2, median, scaled, melted)
+write.table(melted_data4_log2, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data4melted_BereczkiBA9.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#Generate a boxplot.
+tiff(file = "Boxplot_data4_f.tiff", units="in", width=10, height=6, res=300, compression = 'lzw')
+ggplot(data = melted_data4_log2, aes(x=sample, y=intensities, fill=group)) +   
+  geom_boxplot(notch = TRUE)
+dev.off()
+```
+
+###Dataset5, Rezeli EC 
+```{r}
+data5 = read.delim("../data/Rezeli_EC.txt", na.strings = "NaN")
+row.names(data5)=data5$Accession
+data5 = data5[,-c(1:1)]
+n_occur = data.frame(table(data5$Accession))
+
+data5C = data5[,1:7]
+data5C_rowNA = rowSums(is.na(data5C))
+rowNA_0 = which(data5C_rowNA==0)
+rowNA_1 = which(data5C_rowNA==1)
+rowNA_2 = which(data5C_rowNA==2)
+rowNA_more = which(data5C_rowNA > 2)
+data5C_filtered = data5C[which(data5C_rowNA <2),]
+
+data5AD = data5[,18:23]
+data5AD_rowNA = rowSums(is.na(data5AD))
+rowNA_AD_0 = which(data5AD_rowNA==0)
+rowNA_AD_1 = which(data5AD_rowNA==1)
+rowNA_AD_2 = which(data5AD_rowNA==2)
+rowNA_AD_more = which(data5AD_rowNA > 2)
+data5AD_filtered = data5AD[which(data5AD_rowNA <2),]
+
+#data5EBB = data5[,8:17]
+#data5EBB_rowNA = rowSums(is.na(data5EBB))
+#rowNA_EBB_0 = which(data5EBB_rowNA==0)
+#rowNA_EBB_1 = which(data5EBB_rowNA==1)
+#rowNA_EBB_2 = which(data5EBB_rowNA==2)
+#rowNA_EBB_more = which(data5EBB_rowNA > 2)
+#data5EBB_filtered = data5EBB[which(data5EBB_rowNA <3),]
+
+#merge filtered C and AD df
+data5 = merge(data5C_filtered, data5AD_filtered, by = "row.names")
+row.names(data5) = data5$Row.names
+data5 = data5[, -c(1:1)]
+
+# add C and AD NA info to the df data_NAs
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data5_C"), "NA0" = length(rowNA_0), "NA1" = length(rowNA_1), "NA2" = length(rowNA_2), "NAmore2" = length(rowNA_more)) ) 
+
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data5_AD"), "NA0" = length(rowNA_AD_0), "NA1" = length(rowNA_AD_1), "NA2" = length(rowNA_AD_2), "NAmore2" = length(rowNA_AD_more)) ) 
+
+#Filtered data (cut-off 20% of NAs per group) - save as a text file automatically in wd 
+write.table(data5, file = "../data/filtered_NA/data5_RezeliEC_filteredNOEBB.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+####START FROM HERE WITH FILTERED DATA! 
+#data5 = read.delim("../data/filtered_NA/data5_RezeliEC_filteredNOEBB.txt")
+
+#log2 conversion 
+data5_log2 = log2(data5)
+data5_log2_med = apply(data5_log2, 2, FUN = median, na.rm = TRUE)
+data5_log2 = as.data.frame(scale(data5_log2, center = data5_log2_med, scale = TRUE))
+
+#Formatted data (cut-off 1 NA in AD, C and 2 NAs in EBB, log2, median, scaled) - save as a text file automatically in wd 
+write.table(data5_log2, file = "../data/formatted_wide_log2/Metadata_input/data5_RezeliEC_formattedNOEBB.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#melt the df for boxplot
+data5_log2$protein=row.names(data5_log2)
+melted_data5_log2 = melt(data5_log2, id.vars = ('protein'), value.name = 'intensities', variable.name = 'sample')
+melted_data5_log2$group = gsub('\\d+$','',melted_data5_log2$sample)
+melted_data5_log2$dataset = c("Data5")
+melted_data5_log2$brain.region = c("Temporal.lobe")
+#order: dataset, sample, protein, intensities, group, brain region, batch
+melted_data5_log2 = melted_data5_log2[,c(5,2,1,3,4,6)]
+melted_data5_log2$labeling = c("No")
+melted_data5_log2$lysis = c("Urea")
+
+#Formatted data (cut-off 1 NA in AD/C, log2, median, scaled, melted)
+write.table(melted_data5_log2, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data5melted_RezeliEC_formattedNOEBB.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#Generate a boxplot.
+tiff(file = "Boxplot_data5_f.tiff", units="in", width=10, height=6, res=300, compression = 'lzw')
+ggplot(data = melted_data5_log2, aes(x=sample, y=intensities, fill=group)) +   
+  geom_boxplot(notch = TRUE)
+dev.off()
+```
+
+### Dataset6, Rezeli FC 
+```{r}
+data6 = read.delim("../data/Rezeli_FC.txt", na.strings = "NaN")
+row.names(data6)=data6$Accession
+data6 = data6[,-c(1:1)]
+
+data6C = data6[,1:7]
+data6C_rowNA = rowSums(is.na(data6C))
+rowNA_0 = which(data6C_rowNA==0)
+rowNA_1 = which(data6C_rowNA==1)
+rowNA_2 = which(data6C_rowNA==2)
+rowNA_more = which(data6C_rowNA > 2)
+data6C_filtered = data6C[which(data6C_rowNA <2),]
+
+data6AD = data6[,17:26]
+data6AD_rowNA = rowSums(is.na(data6AD))
+rowNA_AD_0 = which(data6AD_rowNA==0)
+rowNA_AD_1 = which(data6AD_rowNA==1)
+rowNA_AD_2 = which(data6AD_rowNA==2)
+rowNA_AD_more = which(data6AD_rowNA > 2)
+data6AD_filtered = data6AD[which(data6AD_rowNA <3),]
+
+#data6EBB = data6[,8:16]
+#data6EBB_rowNA = rowSums(is.na(data6EBB))
+#rowNA_EBB_0 = which(data6EBB_rowNA==0)
+#rowNA_EBB_1 = which(data6EBB_rowNA==1)
+#rowNA_EBB_2 = which(data6EBB_rowNA==2)
+#rowNA_EBB_more = which(data6EBB_rowNA > 2)
+#data6EBB_filtered = data6EBB[which(data6EBB_rowNA <2),]
+
+data6 = merge(data6C_filtered, data6AD_filtered, by = "row.names")
+row.names(data6) = data6$Row.names
+data6 = data6[, -c(1:1)]
+
+# add C and AD NA info to the df data_NAs
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data6_C"), "NA0" = length(rowNA_0), "NA1" = length(rowNA_1), "NA2" = length(rowNA_2), "NAmore2" = length(rowNA_more)) ) 
+
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data6_AD"), "NA0" = length(rowNA_AD_0), "NA1" = length(rowNA_AD_1), "NA2" = length(rowNA_AD_2), "NAmore2" = length(rowNA_AD_more)) ) 
+
+#Filtered data (cut-off 20% NA per group) - save as a text file automatically in wd 
+write.table(data6, file = "../data/filtered_NA/data6_RezeliFC_filteredNOEBB.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+####START FROM HERE WITH FILTERED DATA! 
+#data6 = read.delim("../data/filtered_NA/data6_RezeliFC_filteredNOEBB.txt")
+
+#log2 conversion, calculate FC 
+data6_log2 = log2(data6)
+data6_log2_med = apply(data6_log2, 2, FUN = median, na.rm = TRUE)
+data6_log2 = as.data.frame(scale(data6_log2, center = data6_log2_med, scale = TRUE))
+
+#Formatted data (cut-off 1 NA in C and EBB, 2 NAs in AD,NA imputation, log2, median,scaled) - save as a text file automatically in wd 
+write.table(data6_log2, file = "../data/formatted_wide_log2/Metadata_input/data6_RezeliFC_formattedNOEBB.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#melt the df for boxplot
+data6_log2$protein=row.names(data6_log2)
+melted_data6_log2 = melt(data6_log2, id.vars = ('protein'), value.name = 'intensities', variable.name = 'sample')
+melted_data6_log2$group = gsub('\\d+$','',melted_data6_log2$sample)
+melted_data6_log2$dataset = c("Data6")
+melted_data6_log2$brain.region = c("Frontal.lobe")
+#order: dataset, sample, protein, intensities, group, brain region, batch
+melted_data6_log2 = melted_data6_log2[,c(5,2,1,3,4,6)]
+melted_data6_log2$labeling = c("No")
+melted_data6_log2$lysis = c("Urea")
+
+#Formatted data (cut-off 1 NA in C, 2 NAs in AD, log2, median, scaled, melted)
+write.table(melted_data6_log2, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data6melted_Rezeli_noEBB.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#Generate a boxplot.
+tiff(file = "Boxplot_data6_f.tiff", units="in", width=10, height=6, res=300, compression = 'lzw')
+ggplot(data = melted_data6_log2, aes(x=sample, y=intensities, fill=group)) +   
+  geom_boxplot(notch = TRUE)
+dev.off()
+```
+
+###Dataset7, Rezeli PHC 
+```{r}
+data7 = read.delim("../data/Rezeli_PHC.txt", na.strings = "NaN")
+row.names(data7)=data7$Accession
+data7 = data7[,-c(1:1)]
+
+#missing values 
+data7C = data7[,1:11]
+data7C_rowNA = rowSums(is.na(data7C))
+rowNA_0 = which(data7C_rowNA==0)
+rowNA_1 = which(data7C_rowNA==1)
+rowNA_2 = which(data7C_rowNA==2)
+rowNA_more = which(data7C_rowNA > 2)
+data7C_filtered = data7C[which(data7C_rowNA <3),]
+
+data7AD = data7[,21:25]
+data7AD_rowNA = rowSums(is.na(data7AD))
+rowNA_AD_0 = which(data7AD_rowNA==0)
+rowNA_AD_1 = which(data7AD_rowNA==1)
+rowNA_AD_2 = which(data7AD_rowNA==2)
+rowNA_AD_more = which(data7AD_rowNA > 2)
+data7AD_filtered = data7AD[which(data7AD_rowNA <2),]
+
+#data7EBB = data7[,12:20]
+#data7EBB_rowNA = rowSums(is.na(data7EBB))
+#rowNA_EBB_0 = which(data7EBB_rowNA==0)
+#rowNA_EBB_1 = which(data7EBB_rowNA==1)
+#rowNA_EBB_2 = which(data7EBB_rowNA==2)
+#rowNA_EBB_more = which(data7EBB_rowNA > 2)
+#data7EBB_filtered = data7EBB[which(data7EBB_rowNA <2),]
+
+data7 = merge(data7C_filtered, data7AD_filtered, by = "row.names")
+row.names(data7) = data7$Row.names
+data7 = data7[, -c(1:1)]
+
+# add C and AD NA info to the df data_NAs
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data7_C"), "NA0" = length(rowNA_0), "NA1" = length(rowNA_1), "NA2" = length(rowNA_2), "NAmore2" = length(rowNA_more)) ) 
+
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data7_AD"), "NA0" = length(rowNA_AD_0), "NA1" = length(rowNA_AD_1), "NA2" = length(rowNA_AD_2), "NAmore2" = length(rowNA_AD_more)) ) 
+
+#Filtered data (cut-off 1 NA (20%) per group) - save as a text file automatically in wd 
+write.table(data7, file = "../data/filtered_NA/data7_RezeliPHC_filteredNOEBB.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+####START FROM HERE WITH FILTERED DATA! 
+#data7 = read.delim("../data/filtered_NA/data7_RezeliPHC_filteredNOEBB.txt")
+
+#log2 conversion
+data7_log2 = log2(data7)
+data7_log2_med = apply(data7_log2, 2, FUN = median, na.rm = TRUE)
+data7_log2 = as.data.frame(scale(data7_log2, center = data7_log2_med, scale = TRUE))
+
+#Formatted data (cut-off 1 NA in AD, EBB and 2 NAs in C, log2, median,scaled) - save as a text file automatically in wd 
+write.table(data7_log2, file = "../data/formatted_wide_log2/Metadata_input/data7_RezeliPHC_formattedNOEBB.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#melt the df for boxplot
+data7_log2$protein=row.names(data7_log2)
+melted_data7_log2 = melt(data7_log2, id.vars = ('protein'), value.name = 'intensities', variable.name = 'sample')
+melted_data7_log2$group = gsub('\\d+$','',melted_data7_log2$sample)
+melted_data7_log2$dataset = c("Data7")
+melted_data7_log2$brain.region = c("Temporal.lobe")
+#order: dataset, sample, protein, intensities, group, brain region, batch
+melted_data7_log2 = melted_data7_log2[,c(5,2,1,3,4,6)]
+melted_data7_log2$labeling = c("No")
+melted_data7_log2$lysis = c("Urea")
+
+#Formatted data (cut-off 1 NA in C, 2 NAs in AD, log2, median, scaled, melted)
+write.table(melted_data7_log2, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data7melted_RezeliPHC_NOEBB.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#Generate a boxplot.
+tiff(file = "Boxplot_data7_f.tiff", units="in", width=10, height=6, res=300, compression = 'lzw')
+ggplot(data = melted_data7_log2, aes(x=sample, y=intensities, fill=group)) +   
+  geom_boxplot(notch = TRUE)
+dev.off()
+```
+
+###Dataset8, Rezeli TC
+```{r}
+data8 = read.delim("../data/Rezeli_TC.txt", na.strings = "NaN")
+row.names(data8)=data8$Accession
+data8 = data8[,-c(1:1)]
+
+#missing values
+data8C = data8[,1:7]
+data8C_rowNA = rowSums(is.na(data8C))
+rowNA_0 = which(data8C_rowNA==0)
+rowNA_1 = which(data8C_rowNA==1)
+rowNA_2 = which(data8C_rowNA==2)
+rowNA_more = which(data8C_rowNA > 2)
+data8C_filtered = data8C[which(data8C_rowNA <2),]
+
+data8AD = data8[,19:29]
+data8AD_rowNA = rowSums(is.na(data8AD))
+rowNA_AD_0 = which(data8AD_rowNA==0)
+rowNA_AD_1 = which(data8AD_rowNA==1)
+rowNA_AD_2 = which(data8AD_rowNA==2)
+rowNA_AD_more = which(data8AD_rowNA > 2)
+data8AD_filtered = data8AD[which(data8AD_rowNA <3),]
+
+#data8EBB = data8[,8:18]
+#data8EBB_rowNA = rowSums(is.na(data8EBB))
+#rowNA_EBB_0 = which(data8EBB_rowNA==0)
+#rowNA_EBB_1 = which(data8EBB_rowNA==1)
+#rowNA_EBB_2 = which(data8EBB_rowNA==2)
+#rowNA_EBB_more = which(data8EBB_rowNA > 2)
+#data8EBB_filtered = data8EBB[which(data8EBB_rowNA <3),]
+
+data8 = merge(data8C_filtered, data8AD_filtered, by = "row.names")
+row.names(data8) = data8$Row.names
+data8 = data8[, -c(1:1)]
+
+# add C and AD NA info to the df data_NAs
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data8_C"), "NA0" = length(rowNA_0), "NA1" = length(rowNA_1), "NA2" = length(rowNA_2), "NAmore2" = length(rowNA_more)) ) 
+
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data8_AD"), "NA0" = length(rowNA_AD_0), "NA1" = length(rowNA_AD_1), "NA2" = length(rowNA_AD_2), "NAmore2" = length(rowNA_AD_more)) ) 
+
+
+#Filtered data (cut-off 20%) - save as a text file automatically in wd 
+write.table(data8, file = "../data/filtered_NA/data8_RezeliTC_filteredNOEBB.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+####START FROM HERE WITH FILTERED DATA! 
+#data8 = read.delim("../data/filtered_NA/data8_RezeliTC_filteredNOEBB.txt")
+
+#log2 conversion
+data8_log2 = log2(data8) 
+data8_log2_med = apply(data8_log2, 2, FUN = median, na.rm = TRUE)
+data8_log2 = as.data.frame(scale(data8_log2, center = data8_log2_med, scale= TRUE))
+
+#Formatted data (cut-off 1 NA in C, 2 NAs in AD and EBB, log2, median, scaled) - save as a text file automatically in wd 
+write.table(data8_log2, file = "../data/formatted_wide_log2/Metadata_input/data8_RezeliTC_formattedNOEBB.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#melt the df for boxplot
+data8_log2$protein=row.names(data8_log2)
+melted_data8_log2 = melt(data8_log2, id.vars = ('protein'), value.name = 'intensities', variable.name = 'sample')
+melted_data8_log2$group = gsub('\\d+$','',melted_data8_log2$sample)
+melted_data8_log2$dataset = c("Data8")
+melted_data8_log2$brain.region = c("Temporal.lobe")
+#order: dataset, sample, protein, intensities, group, brain region, batch
+melted_data8_log2 = melted_data8_log2[,c(5,2,1,3,4,6)]
+melted_data8_log2$labeling = c("No")
+melted_data8_log2$lysis = c("Urea")
+
+#Formatted data (cut-off 1 NA in C, 2 NAs in AD, log2, median, scaled, melted)
+write.table(melted_data8_log2, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data8melted_RezeliPHC_NOEBB.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#Generate a boxplot.
+tiff(file = "Boxplot_data8_f.tiff", units="in", width=10, height=6, res=300, compression = 'lzw')
+ggplot(data = melted_data8_log2, aes(x=sample, y=intensities, fill=group)) +   
+  geom_boxplot(notch = TRUE)
+dev.off()
+```
+
+###Dataset10, Ping PFC (BA9)
+```{r}
+data10 = read.delim("../data/Ping_BA9.txt", na.strings = "0")
+row.names(data10)=data10$Accession
+data10 = data10[,-c(1:6)]
+
+#missing values 
+data10C = data10[,1:10]
+data10C_rowNA = rowSums(is.na(data10C))
+rowNA_0 = which(data10C_rowNA==0)
+rowNA_1 = which(data10C_rowNA==1)
+rowNA_2 = which(data10C_rowNA==2)
+rowNA_more = which(data10C_rowNA > 2)
+data10C_filtered = data10C[which(data10C_rowNA <3),]
+
+data10AD = data10[,11:20]
+data10AD_rowNA = rowSums(is.na(data10AD))
+rowNA_AD_0 = which(data10AD_rowNA==0)
+rowNA_AD_1 = which(data10AD_rowNA==1)
+rowNA_AD_2 = which(data10AD_rowNA==2)
+rowNA_AD_more = which(data10AD_rowNA > 2)
+data10AD_filtered = data10AD[which(data10AD_rowNA <3),]
+
+data10 = merge(data10C_filtered, data10AD_filtered, by = "row.names")
+row.names(data10) = data10$Row.names
+data10 = data10[,-c(1:1)]
+
+# add C and AD NA info to the df data_NAs
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data10_C"), "NA0" = length(rowNA_0), "NA1" = length(rowNA_1), "NA2" = length(rowNA_2), "NAmore2" = length(rowNA_more)) ) 
+
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data10_AD"), "NA0" = length(rowNA_AD_0), "NA1" = length(rowNA_AD_1), "NA2" = length(rowNA_AD_2), "NAmore2" = length(rowNA_AD_more)) ) 
+
+#Filtered data (cut-off NA (20%) 2 NAs in AD and C) - save as a text file automatically in wd 
+write.table(data10, file = "data10_PingBA9_filtered.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+####START FROM HERE WITH FILTERED DATA! 
+#data10 = read.delim("../data/filtered_NA/data10_PingBA9_filtered.txt")
+
+#log2 conversion
+data10_log2 = log2(data10)
+data10_log2_med = apply(data10_log2, 2, FUN = median, na.rm = TRUE)
+data10_log2 = as.data.frame(scale(data10_log2, center = data10_log2_med, scale= TRUE))
+
+#Formatted data (cut-off 2 NAs in AD and C, NA imput, log2, median, scaled) - save as a text file automatically in wd 
+write.table(data10_log2, file = "../data/formatted_wide_log2/Metadata_input/data10_PingBA9_formatted.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#melt the df for boxplot
+data10_log2$protein=row.names(data10_log2)
+melted_data10_log2 = melt(data10_log2, id.vars = ('protein'), value.name = 'intensities', variable.name = 'sample')
+melted_data10_log2$group = gsub('\\d+$','',melted_data10_log2$sample)
+melted_data10_log2$dataset = c("Data10")
+melted_data10_log2$brain.region = c("Frontal.lobe")
+#order: dataset, sample, protein, intensities, group, brain region, batch
+melted_data10_log2 = melted_data10_log2[,c(5,2,1,3,4,6)]
+melted_data10_log2$labeling = c("Yes")
+melted_data10_log2$lysis = c("Urea")
+
+#Formatted data (cut-off 2 NAs in AD and C, log2, median, scaled, melted)
+write.table(melted_data10_log2, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data10melted_PingBA9.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#Generate a boxplot.
+tiff(file = "Boxplot_data10_fnormalized.tiff", units="in", width=10, height=6, res=300, compression = 'lzw')
+ggplot(data = melted_data10_log2, aes(x=sample, y=intensities, fill=group)) +   
+  geom_boxplot(notch = TRUE)
+dev.off()
+```
+
+###Dataset11, Johnson BA9
+```{r}
+data11 = read.delim("../data/Johnson_BA9int.txt", na.strings = "#VALUE!")
+row.names(data11) = data11$UniprotAccession
+data11 = data11[,-c(1:2)] 
+
+#exclude MCI cases columns 48:58 and AsymAD cases columns 34:47. 
+#missing values
+data11C = data11[,1:13]
+data11C_rowNA = rowSums(is.na(data11C))
+rowNA_0 = which(data11C_rowNA==0)
+rowNA_1 = which(data11C_rowNA==1)
+rowNA_2 = which(data11C_rowNA==2)
+rowNA_more = which(data11C_rowNA > 2)
+data11C_filtered = data11C[which(data11C_rowNA <3),]
+
+data11AD = data11[,14:33]
+data11AD_rowNA = rowSums(is.na(data11AD))
+rowNA_AD_0 = which(data11AD_rowNA==0)
+rowNA_AD_1 = which(data11AD_rowNA==1)
+rowNA_AD_2 = which(data11AD_rowNA==2)
+rowNA_AD_more = which(data11AD_rowNA > 2)
+data11AD_filtered = data11AD[which(data11AD_rowNA <5),]
+
+data11 = merge(data11C_filtered, data11AD_filtered, by = "row.names")
+row.names(data11) = data11$Row.names
+data11 = data11[,-c(1:1)]
+
+# add C and AD NA info to the df data_NAs
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data11_C"), "NA0" = length(rowNA_0), "NA1" = length(rowNA_1), "NA2" = length(rowNA_2), "NAmore2" = length(rowNA_more)) ) 
+
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data11_AD"), "NA0" = length(rowNA_AD_0), "NA1" = length(rowNA_AD_1), "NA2" = length(rowNA_AD_2), "NAmore2" = length(rowNA_AD_more)) ) 
+
+#Filtered data (cut-off NA 20%) - save as a text file automatically in wd 
+write.table(data11, file = "../data/filtered_NA/data11_JohnsonBA9int_filtered_noAsymAD.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+####START FROM HERE WITH FILTERED DATA! 
+#data11 = read.delim("../data/filtered_NA/data11_JohnsonBA9int_filtered_noAsymAD.txt")
+data11 = data11[-c(229),] #remove abeta - doesn't fit with other uniprot IDs
+
+data11_log2 = log2(data11)
+data11_log2_med = apply(data11_log2, 2, FUN = median, na.rm = TRUE)
+data11_log2 = as.data.frame(scale(data11_log2, center = data11_log2_med, scale= TRUE))
+
+
+#Formatted data (cut-off 4 NAs in AD and 2 in C, NA imputation, log2, median, scaled) - save as a text file automatically in wd 
+write.table(data11_log2, file = "../data/formatted_wide_log2/Metadata_input/data11_JohnsonBA9_formatted_noAsymAD.txt", row.names = TRUE, quote = FALSE, sep = "\t" ) 
+
+#melt the df for boxplot
+data11_log2$protein=row.names(data11_log2)
+melted_data11_log2 = melt(data11_log2, id.vars = ('protein'), value.name = 'intensities', variable.name = 'sample')
+melted_data11_log2$group = gsub('\\d+$','',melted_data11_log2$sample)
+melted_data11_log2$dataset = c("Data11")
+melted_data11_log2$brain.region = c("Frontal.lobe")
+#order: dataset, sample, protein, intensities, group, brain region, batch
+melted_data11_log2 = melted_data11_log2[,c("dataset", "sample", "protein", "intensities", "group", "brain.region")]
+melted_data11_log2$labeling = c("Yes")
+melted_data11_log2$lysis = c("Urea")
+
+#Formatted data (cut-off 4 NAs in AD and 2 in C,log2, median, scaled, melted)
+write.table(melted_data11_log2, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data11melted_JohnsonBA9noAsymAD_noAbeta.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#Generate a boxplot.
+tiff(file = "Boxplot_data11_fnormalized.tiff", units="in", width=10, height=6, res=300, compression = 'lzw')
+ggplot(data = melted_data11_log2, aes(x=sample, y=intensities, fill=group)) +   
+  geom_boxplot(notch = TRUE)
+dev.off()
+```
+
+###Dataset12, Johnson_DLPFC (consensus)
+```{r}
+data12 = read.delim("../data/Johnson_BA9_consensus.txt")
+names(data12)[1] = paste("UniprotID")
+names(data12)[2] = paste("Protein")
+row.names(data12)=data12$UniprotID
+data12 = data12[,-c(1:2)]
+
+#exclude AsymAD cases
+data12C = data12[,c(36:46, 92, 93, 95, 97, 99, 100, 101, 133, 140:142, 186, 187, 190, 194, 195, 218, 223:225, 227:229, 231, 232, 236, 239:249, 290, 295, 298, 299, 302, 309, 314, 316, 321, 336, 340, 349, 350, 354, 355, 362, 370:372, 375, 377, 380, 386, 387, 393:395, 397, 403, 405, 407, 408, 410, 415, 418, 422, 423, 428, 431:433, 435, 436, 438, 440, 445)]
+
+data12AD = data12[,c(1:16, 18:35,58, 61:64, 66:70, 72,73, 75:86,104:116, 118:128, 144, 150:159, 161:165, 167:169, 171:181, 200:213, 215:217, 250:269, 283:288, 291:294, 296, 297, 300, 301, 303, 305:308, 311, 312,315, 317:319, 322:335, 337:339, 341, 342, 344:348, 351:353, 356:361, 363:367, 373, 374, 376, 378, 379, 381, 384, 388, 390:392, 399:402, 404, 406, 409, 412, 413, 416, 417, 419:421, 424:427, 429, 430, 434, 437, 439, 441:443, 446:448)]
+
+#check for missing values (is.na).
+data12_colNAs=colSums(is.na(data12))
+
+data12C_rowNA = rowSums(is.na(data12C))
+rowNA_0 = which(data12C_rowNA==0)
+rowNA_1 = which(data12C_rowNA==1)
+rowNA_2 = which(data12C_rowNA==2)
+rowNA_more = which(data12C_rowNA > 2)
+data12C_filtered = data12C[which(data12C_rowNA <19),]
+
+data12AD_rowNA = rowSums(is.na(data12AD))
+rowNA_AD_0 = which(data12AD_rowNA==0)
+rowNA_AD_1 = which(data12AD_rowNA==1)
+rowNA_AD_2 = which(data12AD_rowNA==2)
+rowNA_AD_more = which(data12AD_rowNA > 2)
+data12AD_filtered = data12AD[which(data12AD_rowNA <51),]
+
+data12 = merge(data12C_filtered, data12AD_filtered, by = "row.names")
+row.names(data12) = data12$Row.names
+data12 = data12[, -c(1:1)]
+
+# add C and AD NA info to the df data_NAs
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data12_C"), "NA0" = length(rowNA_0), "NA1" = length(rowNA_1), "NA2" = length(rowNA_2), "NAmore2" = length(rowNA_more)) ) 
+
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data12_AD"), "NA0" = length(rowNA_AD_0), "NA1" = length(rowNA_AD_1), "NA2" = length(rowNA_AD_2), "NAmore2" = length(rowNA_AD_more)) ) 
+
+
+#Filtered data (cut-off NA 20%) - save as a text file automatically in wd 
+write.table(data12, file = "data12_Johnson_BA9consensus_filterednoAsymAD.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+####START FROM HERE WITH FILTERED DATA! 
+#data12 = read.delim("../data/filtered_NA/data12_Johnson_BA9consensus_filterednoAsymAD.txt")
+
+#log2 conversion - data is normalized using TAMPOR (median-near)
+data12_log2 = log2(data12) 
+data12_log2_med = apply(data12_log2, 2, FUN = median, na.rm = TRUE)
+data12_log2 = as.data.frame(scale(data12_log2, center = data12_log2_med, scale= TRUE))
+
+#Formatted data (cut-off 18 NAs in C and 50 in AD, log2, median, scaled) - save as a text file automatically in wd 
+write.table(data12_log2, file = "../data/formatted_wide_log2/Metadata_input/data12_Johnson_BA9consensus_formattedMEDIANnoAsymAD.txt", row.names = TRUE, quote = FALSE, sep = "\t" ) 
+
+#melt the df for boxplot
+data12_log2$protein=row.names(data12_log2)
+melted_data12_log2 = melt(data12_log2, id.vars = ('protein'), value.name = 'intensities', variable.name = 'sample')
+melted_data12_log2$group = gsub('\\d+$','',melted_data12_log2$sample)
+melted_data12_log2$dataset = c("Data12")
+melted_data12_log2$brain.region = c("Frontal.lobe")
+#order: dataset, sample, protein, intensities, group, brain region, batch
+melted_data12_log2 = melted_data12_log2[,c(5,2,1,3,4,6)]
+melted_data12_log2$labeling = c("No")
+melted_data12_log2$lysis = c("Urea")
+
+#Formatted data (cut-off 18 NAs in C and 50 in AD,log2, median, scaled, melted)
+write.table(melted_data12_log2, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data12melted_Johnson_BA9consensus_noAsymAD_formattedMEDIAN.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#Generate a boxplot.
+pdf(file = "Boxplot_data12_fnormalized.pdf", width=50, height=20)
+ggplot(data = melted_data12_log2, aes(x=sample, y=intensities, fill=group)) +   
+  geom_boxplot(notch = TRUE)
+dev.off()
+```
+
+###Dataset13, Mayo_TC (Johnson2020 nat med)
+```{r}
+data13 = read.delim("../data/Mayo_TC.txt")
+row.names(data13)=data13$UniprotID
+data13 = data13[,-c(1:2)]
+
+#check for missing values (is.na).
+data13_colNAs=colSums(is.na(data13))
+
+data13C = data13[,1:28]
+data13C_rowNA = rowSums(is.na(data13C))
+rowNA_0 = which(data13C_rowNA==0)
+rowNA_1 = which(data13C_rowNA==1)
+rowNA_2 = which(data13C_rowNA==2)
+rowNA_more = which(data13C_rowNA > 2)
+data13C_filtered = data13C[which(data13C_rowNA <6),]
+
+data13AD = data13[,29:111]
+data13AD_rowNA = rowSums(is.na(data13AD))
+rowNA_AD_0 = which(data13AD_rowNA==0)
+rowNA_AD_1 = which(data13AD_rowNA==1)
+rowNA_AD_2 = which(data13AD_rowNA==2)
+rowNA_AD_more = which(data13AD_rowNA > 2)
+data13AD_filtered = data13AD[which(data13AD_rowNA <23),]
+
+data13 = merge(data13C_filtered, data13AD_filtered, by = "row.names")
+row.names(data13) = data13$Row.names
+data13 = data13[, -c(1:1)]
+
+# add C and AD NA info to the df data_NAs
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data13_C"), "NA0" = length(rowNA_0), "NA1" = length(rowNA_1), "NA2" = length(rowNA_2), "NAmore2" = length(rowNA_more)) ) 
+
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data13_AD"), "NA0" = length(rowNA_AD_0), "NA1" = length(rowNA_AD_1), "NA2" = length(rowNA_AD_2), "NAmore2" = length(rowNA_AD_more)) ) 
+
+#Filtered data (cut-off NA (20%) - allowing 5 NAs in C and 22 NAs in AD) - save as a text file automatically in wd 
+write.table(data13, file = "data13_MayoTC_filtered.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+####START FROM HERE WITH FILTERED DATA! 
+#data13 = read.delim("../data/filtered_NA/data13_MayoTC_filtered.txt")
+
+#log2 conversion - data is normalized using TAMPOR (median-near)
+data13_log2 = log2(data13) 
+data13_log2_med = apply(data13_log2, 2, FUN = median, na.rm = TRUE)
+data13_log2 = as.data.frame(scale(data13_log2, center = data13_log2_med, scale= TRUE))
+
+#Formatted data (cut-off 5 NAs in C and 22 in AD, log2, median, scaled) - save as a text file automatically in wd 
+write.table(data13_log2, file = "../data/formatted_wide_log2/Metadata_input/data13_MayoTC_formattedMEDIAN.txt", row.names = TRUE, quote = FALSE, sep = "\t" ) 
+
+#melt the df for boxplot
+data13_log2$protein=row.names(data13_log2)
+melted_data13_log2 = melt(data13_log2, id.vars = ('protein'), value.name = 'intensities', variable.name = 'sample')
+melted_data13_log2$group = gsub('\\d+$','',melted_data13_log2$sample)
+melted_data13_log2$dataset = c("Data13")
+melted_data13_log2$brain.region = c("Temporal.lobe")
+#order: dataset, sample, protein, intensities, group, brain region, batch
+melted_data13_log2 = melted_data13_log2[,c(5,2,1,3,4,6)]
+melted_data13_log2$labeling = c("No")
+melted_data13_log2$lysis = c("Urea")
+
+#Formatted data (cut-off 5 NAs in C and 22 in AD, log2, median, scaled, melted)
+write.table(melted_data13_log2, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data13melted_MayoTC_formattedMEDIAN.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#Generate a boxplot.
+tiff(file = "Boxplot_data13_fnormalized.tiff", units="in", width=10, height=6, res=300, compression = 'lzw')
+ggplot(data = melted_data13_log2, aes(x=sample, y=intensities, fill=group)) +   
+  geom_boxplot(notch = TRUE)
+dev.off()
+```
+
+###Dataset14, UPenn_DLPFC (Johnson2020 nat med)
+```{r}
+data14 = read.delim("../data/UPenn_BA9.txt")
+row.names(data14)=data14$UniprotID
+data14 = data14[,-c(1:2)]
+
+#check for missing values (is.na).
+data14_colNAs=colSums(is.na(data14))
+
+data14C = data14[,1:46]
+data14C_rowNA = rowSums(is.na(data14C))
+rowNA_0 = which(data14C_rowNA==0)
+rowNA_1 = which(data14C_rowNA==1)
+rowNA_2 = which(data14C_rowNA==2)
+rowNA_more = which(data14C_rowNA > 2)
+data14C_filtered = data14C[which(data14C_rowNA <10),]
+
+data14AD = data14[,47:95]
+data14AD_rowNA = rowSums(is.na(data14AD))
+rowNA_AD_0 = which(data14AD_rowNA==0)
+rowNA_AD_1 = which(data14AD_rowNA==1)
+rowNA_AD_2 = which(data14AD_rowNA==2)
+rowNA_AD_more = which(data14AD_rowNA > 2)
+data14AD_filtered = data14AD[which(data14AD_rowNA <10),]
+
+data14 = merge(data14C_filtered, data14AD_filtered, by = "row.names")
+row.names(data14) = data14$Row.names
+data14 = data14[, -c(1:1)]
+
+# add C and AD NA info to the df data_NAs
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data14_C"), "NA0" = length(rowNA_0), "NA1" = length(rowNA_1), "NA2" = length(rowNA_2), "NAmore2" = length(rowNA_more)) ) 
+
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data14_AD"), "NA0" = length(rowNA_AD_0), "NA1" = length(rowNA_AD_1), "NA2" = length(rowNA_AD_2), "NAmore2" = length(rowNA_AD_more)) ) 
+
+#Filtered data (cut-off NA 20%) - save as a text file automatically in wd 
+write.table(data14, file = "data14_UPennBA9_filtered.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+####START FROM HERE WITH FILTERED DATA! 
+#data14 = read.delim("../data/filtered_NA/data14_UPennBA9_filtered.txt")
+
+#log2 conversion - data is normalized using TAMPOR (median-near)
+data14_log2 = log2(data14) 
+data14_log2_med = apply(data14_log2, 2, FUN = median, na.rm = TRUE)
+data14_log2 = as.data.frame(scale(data14_log2, center = data14_log2_med, scale= TRUE))
+
+#Formatted data (cut-off 9 NAs in C and AD, log2, median, scaled) - save as a text file automatically in wd 
+write.table(data14_log2, file = "../data/formatted_wide_log2/Metadata_input/data14_UPennBA9_formattedMEDIAN.txt", row.names = TRUE, quote = FALSE, sep = "\t" ) 
+
+#melt the df for boxplot
+data14_log2$protein=row.names(data14_log2)
+melted_data14_log2 = melt(data14_log2, id.vars = ('protein'), value.name = 'intensities', variable.name = 'sample')
+melted_data14_log2$group = gsub('\\d+$','',melted_data14_log2$sample)
+melted_data14_log2$dataset = c("Data14")
+melted_data14_log2$brain.region = c("Frontal.lobe")
+#order: dataset, sample, protein, intensities, group, brain region, batch
+melted_data14_log2 = melted_data14_log2[,c(5,2,1,3,4,6)]
+melted_data14_log2$labeling = c("No")
+melted_data14_log2$lysis = c("Urea")
+
+#Formatted data (cut-off 9 NAs in C and AD, log2, median, scaled, melted)
+write.table(melted_data14_log2, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data14melted_UPennBA9.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#Generate a boxplot.
+tiff(file = "Boxplot_data14_fnormalized.tiff", units="in", width=10, height=6, res=300, compression = 'lzw')
+ggplot(data = melted_data14_log2, aes(x=sample, y=intensities, fill=group)) +   
+  geom_boxplot(notch = TRUE)
+dev.off()
+```
+
+###Dataset15, Wang_Banner BA9
+all missing values were already removed.
+```{r}
+data15 = read.delim("../data/Wang_Banner_FC.txt")
+row.names(data15)=data15$UniprotAccession
+data15 = data15[,-c(1:2)]
+data15 = data15[,-c(19:24)] #exclude MCI cases
+
+#missing values were excluded!
+data15C = data15[,1:18]
+data15C_rowNA = rowSums(is.na(data15C))
+rowNA_0 = which(data15C_rowNA==0)
+rowNA_1 = which(data15C_rowNA==1)
+rowNA_2 = which(data15C_rowNA==2)
+rowNA_more = which(data15C_rowNA > 2)
+
+data15AD = data15[,19:33]
+data15AD_rowNA = rowSums(is.na(data15AD))
+rowNA_AD_0 = which(data15AD_rowNA==0)
+rowNA_AD_1 = which(data15AD_rowNA==1)
+rowNA_AD_2 = which(data15AD_rowNA==2)
+rowNA_AD_more = which(data15AD_rowNA > 2)
+
+# add C and AD NA info to the df data_NAs
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data15_C"), "NA0" = length(rowNA_0), "NA1" = length(rowNA_1), "NA2" = length(rowNA_2), "NAmore2" = length(rowNA_more)) ) 
+
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data15_AD"), "NA0" = length(rowNA_AD_0), "NA1" = length(rowNA_AD_1), "NA2" = length(rowNA_AD_2), "NAmore2" = length(rowNA_AD_more)) ) 
+
+#log2 conversion
+data15_log2 = log2(data15)
+data15_log2_med = apply(data15_log2, 2, FUN = median)
+data15_log2 = as.data.frame(scale(data15_log2, center = data15_log2_med, scale= TRUE))
+
+#Formatted data (cut-off 0 NAs in C and AD, log2, median, scaled) - save as a text file automatically in wd 
+write.table(data15_log2, file = "../data/formatted_wide_log2/Metadata_input/data15_Wang_BannerFC_formatted.txt", row.names = TRUE, quote = FALSE, sep = "\t" ) 
+
+#melt the df for boxplot 
+data15_log2$protein=row.names(data15_log2)
+melted_data15_log2 = melt(data15_log2, id.vars = ('protein'), value.name = 'intensities', variable.name = 'sample')
+melted_data15_log2$group = gsub('\\d+$','',melted_data15_log2$sample)
+melted_data15_log2$dataset = c("Data15")
+melted_data15_log2$brain.region = c("Frontal.lobe")
+#order: dataset, sample, protein, intensities, group, brain region, batch
+melted_data15_log2 = melted_data15_log2[,c(5,2,1,3,4,6)]
+melted_data15_log2$labeling = c("Yes")
+melted_data15_log2$lysis = c("Urea")
+
+#Formatted data (cut-off 0 NAs in C and AD, log2, median, scaled, melted)
+write.table(melted_data15_log2, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data15melted_Wang_BannerFC.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#Generate a boxplot.
+tiff(file = "Boxplot_data15_fnormalized.tiff", units="in", width=10, height=6, res=300, compression = 'lzw')
+ggplot(data = melted_data15_log2, aes(x=sample, y=intensities, fill=group)) +   
+  geom_boxplot(notch = TRUE)
+dev.off()
+```
+
+###Dataset16, Zhang_Emory FC
+all missing values were already removed.
+```{r}
+data16 = read.delim("../data/Zhang_FC.txt")
+row.names(data16)=data16$Accession
+data16 = data16[,-c(1:3)]
+
+data16C = data16[,1:8]
+data16C_rowNA = rowSums(is.na(data16C))
+rowNA_0 = which(data16C_rowNA==0)
+rowNA_1 = which(data16C_rowNA==1)
+rowNA_2 = which(data16C_rowNA==2)
+rowNA_more = which(data16C_rowNA > 2)
+
+data16AD = data16[,9:16]
+data16AD_rowNA = rowSums(is.na(data16AD))
+rowNA_AD_0 = which(data16AD_rowNA==0)
+rowNA_AD_1 = which(data16AD_rowNA==1)
+rowNA_AD_2 = which(data16AD_rowNA==2)
+rowNA_AD_more = which(data16AD_rowNA > 2)
+
+# add C and AD NA info to the df data_NAs
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data16_C"), "NA0" = length(rowNA_0), "NA1" = length(rowNA_1), "NA2" = length(rowNA_2), "NAmore2" = length(rowNA_more)) ) 
+
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data16_AD"), "NA0" = length(rowNA_AD_0), "NA1" = length(rowNA_AD_1), "NA2" = length(rowNA_AD_2), "NAmore2" = length(rowNA_AD_more)) ) 
+
+#log2 conversion
+data16_log2 = log2(data16)
+data16_log2_med = apply(data16_log2, 2, FUN = median)
+data16_log2 = as.data.frame(scale(data16_log2, center = data16_log2_med, scale= TRUE))
+
+#Formatted data (cut-off 0 NAs in C and AD, log2,median, scaled) - save as a text file automatically in wd 
+write.table(data16_log2, file = "../data/formatted_wide_log2/Metadata_input/data16_ZhangFC_formatted.txt", row.names = TRUE, quote = FALSE, sep = "\t" ) 
+
+#melt the df for boxplot
+data16_log2$protein=row.names(data16_log2)
+melted_data16_log2 = melt(data16_log2, id.vars = ('protein'), value.name = 'intensities', variable.name = 'sample')
+melted_data16_log2$group = gsub('\\d+$','',melted_data16_log2$sample)
+melted_data16_log2$dataset = c("Data16")
+melted_data16_log2$brain.region = c("Frontal.lobe")
+#order: dataset, sample, protein, intensities, group, brain region, batch
+melted_data16_log2 = melted_data16_log2[,c(5,2,1,3,4,6)]
+melted_data16_log2$labeling = c("No")
+melted_data16_log2$lysis = c("SDS")
+
+#Formatted data (cut-off 0 NAs in C and AD, log2, median, scaled, melted)
+write.table(melted_data16_log2, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data16melted_ZhangFC.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#Generate a boxplot.
+tiff(file = "Boxplot_data16_fnormalized.tiff", units="in", width=10, height=6, res=300, compression = 'lzw')
+ggplot(data = melted_data16_log2, aes(x=samples, y=intensities, fill=group)) +   
+  geom_boxplot(notch = TRUE)
+dev.off()
+```
+
+### Dataset17, Unwin HIP 
+set1 and set2 uses 113 for calculating relative intensities, while set3 uses 114. set3 is removed from the analysis. 
+```{r}
+data17a = read.delim("../data/Unwin_HIP1.txt")
+row.names(data17a)=data17a$UniprotID
+data17a = data17a[,-c(1:4)]
+n_occur = data.frame(table(data17a$UniprotID))
+
+data17b = read.delim("../data/Unwin_HIP2.txt")
+row.names(data17b)=data17b$UniprotID
+data17b = data17b[,-c(1:5)]
+
+#set3 excluded data17c = read.delim("../data/Unwin_HIP3.txt")
+data17 = merge(data17a, data17b, by = "row.names")
+row.names(data17) = data17$Row.names
+data17 = data17[,-c(1:1)]
+data17 = data17[,c(1:3, 7:9, 4:6, 10:12)]
+
+#rename
+names(data17)[1] = paste("C1")
+names(data17)[2] = paste("C2")
+names(data17)[3] = paste("C3")
+names(data17)[4] = paste("C4")
+names(data17)[5] = paste("C5")
+names(data17)[6] = paste("C6")
+names(data17)[7] = paste("AD1")
+names(data17)[8] = paste("AD2")
+names(data17)[9] = paste("AD3")
+names(data17)[10] = paste("AD4")
+names(data17)[11] = paste("AD5")
+names(data17)[12] = paste("AD6")
+
+#finding missing values 
+data17C = data17[,1:6]
+data17C_rowNA = rowSums(is.na(data17C))
+rowNA_0 = which(data17C_rowNA==0)
+rowNA_1 = which(data17C_rowNA==1)
+rowNA_2 = which(data17C_rowNA==2)
+rowNA_more = which(data17C_rowNA > 2)
+data17C_filtered=data17C[which(data17C_rowNA < 2),]
+
+data17AD = data17[,7:12]
+data17AD_rowNA = rowSums(is.na(data17AD))
+rowNA_AD_0 = which(data17AD_rowNA==0)
+rowNA_AD_1 = which(data17AD_rowNA==1)
+rowNA_AD_2 = which(data17AD_rowNA==2)
+rowNA_AD_more = which(data17AD_rowNA > 2)
+data17AD_filtered=data17AD[which(data17AD_rowNA < 2),]
+
+data17 = merge(data17C_filtered, data17AD_filtered, by="row.names")
+row.names(data17) = data17$Row.names
+data17 = data17[,-c(1:1)]
+
+#continute adding NA information into the df_NAs.
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset" = c("Data17_C"), "NA0" = length(rowNA_0), "NA1" = length(rowNA_1), "NA2" = length(rowNA_2), "NAmore2" = length(rowNA_more)))
+
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data17_AD"), "NA0" = length(rowNA_AD_0), "NA1" = length(rowNA_AD_1), "NA2" = length(rowNA_AD_2), "NAmore2" = length(rowNA_AD_more)) ) 
+
+write.table(data17, file = "../data/filtered_NA/data17_UnwinHIP_filtered.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+####START FROM HERE WITH FILTERED DATA! 
+#data17 = read.delim("../data/filtered_NA/data17_UnwinHIP_filtered.txt", na.strings = "NA")
+
+#log2 conversion,  
+data17_log2 = log2(data17)
+data17_log2_med = apply(data17_log2, 2, FUN = median)
+data17_log2 = as.data.frame(scale(data17_log2, center = data17_log2_med, scale = TRUE))
+
+#Formatted data (cut-off 1 NA per group, log2, medina, scaled) 
+write.table(data17_log2, file = "../data/formatted_wide_log2/Metadata_input/data17_UnwinHIP_formatted.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#melt the df for boxplot
+data17_log2$protein=row.names(data17_log2)
+melted_data17_log2 = melt(data17_log2, id.vars = ('protein'), value.name = 'intensities', variable.name = 'sample')
+melted_data17_log2$group = gsub('.$','',melted_data17_log2$sample)
+melted_data17_log2$dataset = c("Data17")
+melted_data17_log2$brain.region = c("Temporal.lobe")
+melted_data17_log2 = melted_data17_log2[,c(5,2,1,3,4,6)]
+melted_data17_log2$labeling = c("Yes")
+melted_data17_log2$lysis = c("SDS")
+
+#Formatted data (cut-off 1 NA per group, log2, median, scaled, melted)
+write.table(melted_data17_log2, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data17melted_UnwinHIP.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#Generate a boxplot.
+tiff(file = "Boxplot_data17_f.tiff", units="in", width=10, height=6, res=300, compression = 'lzw')
+ggplot(data = melted_data17_log2, aes(x=sample, y=intensities, fill=group)) +   
+  geom_boxplot(notch = TRUE)
+dev.off()
+```
+
+###Dataset18, Unwin EC 
+3 iTRAQ sets received individually. The data is merged. Set1-3 uses 113 for calculating relative intensities.
+```{r}
+data18a = read.delim("../data/Excel /Unwin/Unwin_EC1new.txt")
+row.names(data18a)=data18a$UniprotID
+data18a = data18a[,-c(1:4)]
+n_occur = data.frame(table(data18a$UniprotID))
+
+data18b = read.delim("../data/Excel /Unwin/Unwin_EC2new.txt")
+row.names(data18b)=data18b$UniprotID
+data18b = data18b[,-c(1:5)]
+
+data18c = read.delim("../data/Excel /Unwin/Unwin_EC3new.txt")
+row.names(data18c)=data18c$UniprotID
+data18c = data18c[,-c(1:5)]
+
+data18 = merge(data18a, data18b, by = "row.names")
+row.names(data18) = data18$Row.names
+data18 = data18[,-c(1:1)]
+
+data18 = merge(data18, data18c, by = "row.names")
+row.names(data18) = data18$Row.names
+data18 = data18[,-c(1:1)]
+
+names(data18)[1] = paste("C1")
+names(data18)[2] = paste("C2")
+names(data18)[3] = paste("C3")
+names(data18)[4] = paste("AD1")
+names(data18)[5] = paste("AD2")
+names(data18)[6] = paste("AD3")
+names(data18)[7] = paste("C4")
+names(data18)[8] = paste("C5")
+names(data18)[9] = paste("C6")
+names(data18)[10] = paste("AD4")
+names(data18)[11] = paste("AD5")
+names(data18)[12] = paste("AD6")
+names(data18)[13] = paste("C7")
+names(data18)[14] = paste("C8")
+names(data18)[15] = paste("C9")
+names(data18)[16] = paste("AD7")
+names(data18)[17] = paste("AD8")
+names(data18)[18] = paste("AD9")
+
+data18 = data18[,c(1:3,7:9,13:15,4:6,10:12,16:18)]
+
+#finding missing values 
+data18C = data18[,1:9]
+data18C_rowNA = rowSums(is.na(data18C))
+rowNA_0 = which(data18C_rowNA==0)
+rowNA_1 = which(data18C_rowNA==1)
+rowNA_2 = which(data18C_rowNA==2)
+rowNA_more = which(data18C_rowNA > 2)
+data18C_filtered=data18C[which(data18C_rowNA < 2),]
+
+data18AD = data18[,10:18]
+data18AD_rowNA = rowSums(is.na(data18AD))
+rowNA_AD_0 = which(data18AD_rowNA==0)
+rowNA_AD_1 = which(data18AD_rowNA==1)
+rowNA_AD_2 = which(data18AD_rowNA==2)
+rowNA_AD_more = which(data18AD_rowNA > 2)
+data18AD_filtered=data18AD[which(data18AD_rowNA < 2),]
+
+data18 = merge(data18C_filtered, data18AD_filtered, by="row.names")
+row.names(data18) = data18$Row.names
+data18 = data18[,-c(1:1)]
+
+write.table(data18, file = "../data/filtered_NA/data18_UnwinEC_filtered.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#continute adding NA information into the df_NAs.
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset" = c("Data18_C"), "NA0" = length(rowNA_0), "NA1" = length(rowNA_1), "NA2" = length(rowNA_2), "NAmore2" = length(rowNA_more)) )
+
+#add data for AD to the df data_NAs
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data18_AD"), "NA0" = length(rowNA_AD_0), "NA1" = length(rowNA_AD_1), "NA2" = length(rowNA_AD_2), "NAmore2" = length(rowNA_AD_more)) ) 
+
+####START FROM HERE - FILTERED DATA
+#data18 = read.delim("../data/filtered_NA/data18_UnwinEC_filtered.txt")
+
+#log2 conversion,  
+data18_log2 = log2(data18)
+data18_log2_med = apply(data18_log2, 2, FUN = median)
+data18_log2 = as.data.frame(scale(data18_log2, center = data18_log2_med, scale = TRUE))
+
+#Formatted data (cut-off 1 NA per group, log2, median, scaled) 
+write.table(data18_log2, file = "../data/formatted_wide_log2/Metadata_input/data18_UnwinEC_formatted.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#melt the df for boxplot
+data18_log2$protein=row.names(data18_log2)
+melted_data18_log2 = melt(data18_log2, id.vars = ('protein'), value.name = 'intensities', variable.name = 'sample')
+melted_data18_log2$group = gsub('.$','',melted_data18_log2$sample)
+melted_data18_log2$dataset = c("Data18")
+melted_data18_log2$brain.region = c("Temporal.lobe")
+melted_data18_log2 = melted_data18_log2[,c(5,2,1,3,4,6)]
+melted_data18_log2$labeling = c("Yes")
+melted_data18_log2$lysis = c("SDS")
+
+#Formatted data (cut-off 1 NA per group, log2, median, scaled, melted)
+write.table(melted_data18_log2, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data18melted_UnwinEC.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#Generate a boxplot.
+tiff(file = "Boxplot_data18_f.tiff", units="in", width=10, height=6, res=300, compression = 'lzw')
+ggplot(data = melted_data18_log2, aes(x=sample, y=intensities, fill=group)) +   
+  geom_boxplot(notch = TRUE)
+dev.off()
+```
+
+###Dataset20, Wang_MountSinai BA9
+all missing values were already removed.
+```{r}
+data20 = read.delim("../data/Wang_MountSinai_BA9.txt")
+row.names(data20)=data20$UniprotAccesion
+data20 = data20[,-c(1:2)]
+
+#missing values were excluded!
+data20C = data20[,1:23]
+data20C_rowNA = rowSums(is.na(data20C))
+rowNA_0 = which(data20C_rowNA==0)
+rowNA_1 = which(data20C_rowNA==1)
+rowNA_2 = which(data20C_rowNA==2)
+rowNA_more = which(data20C_rowNA > 2)
+
+data20AD = data20[,24:62]
+data20AD_rowNA = rowSums(is.na(data20AD))
+rowNA_AD_0 = which(data20AD_rowNA==0)
+rowNA_AD_1 = which(data20AD_rowNA==1)
+rowNA_AD_2 = which(data20AD_rowNA==2)
+rowNA_AD_more = which(data20AD_rowNA > 2)
+
+# add C and AD NA info to the df data_NAs
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data20_C"), "NA0" = length(rowNA_0), "NA1" = length(rowNA_1), "NA2" = length(rowNA_2), "NAmore2" = length(rowNA_more)) ) 
+
+data_NAs = rbind(data_NAs,
+                 data.frame("Dataset"=c("Data20_AD"), "NA0" = length(rowNA_AD_0), "NA1" = length(rowNA_AD_1), "NA2" = length(rowNA_AD_2), "NAmore2" = length(rowNA_AD_more)) ) 
+
+#log2 conversion
+data20_log2 = log2(data20)
+data20_log2_med = apply(data20_log2, 2, FUN = median)
+data20_log2 = as.data.frame(scale(data20_log2, center = data20_log2_med, scale= TRUE))
+
+#Formatted data (cut-off 0 NAs in C and AD, log2, median, scaled) - save as a text file automatically in wd 
+write.table(data20_log2, file = "../data/formatted_wide_log2/Metadata_input/data20_Wang_MSinaiFC_formatted.txt", row.names = TRUE, quote = FALSE, sep = "\t" ) 
+
+#melt the df for boxplot 
+data20_log2$protein=row.names(data20_log2)
+melted_data20_log2 = melt(data20_log2, id.vars = ('protein'), value.name = 'intensities', variable.name = 'sample')
+melted_data20_log2$group = gsub('\\d+$','',melted_data20_log2$sample)
+melted_data20_log2$dataset = c("Data20")
+melted_data20_log2$brain.region = c("Frontal.lobe")
+#order: dataset, sample, protein, intensities, group, brain region, batch
+melted_data20_log2 = melted_data20_log2[,c(5,2,1,3,4,6)]
+melted_data20_log2$labeling = c("Yes")
+melted_data20_log2$lysis = c("Urea")
+
+#Formatted data (cut-off 0 NAs in C and AD, log2, median, scaled, melted)
+write.table(melted_data20_log2, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data20melted_Wang_MSinaiFC.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#Generate a boxplot.
+tiff(file = "../results/Boxplots/Boxplot_data20_fnormalized.tiff", units="in", width=10, height=6, res=300, compression = 'lzw')
+ggplot(data = melted_data20_log2, aes(x=sample, y=intensities, fill=group)) +   
+  geom_boxplot(notch = TRUE)
+dev.off()
+```
+
+
+## df_NAs - comparison across studies 
+```{r}
+#NA information saved as a new txt file (data1-20). 
+#write.table(data_NAs, file = "data_NAs.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+#data_NAs = read.delim("../data/data_NAs.txt")
+
+melted_NAs=melt(data_NAs, value.name = 'values', variable.name = 'NA_found')
+
+#plotting - melted NAs. x-axis NA_found and fill dataset
+pdf(file = "dfFULL_NAfound.pdf", width=10, height = 7)
+ggplot(data = melted_NAs, 
+       aes(x=NA_found,y=values,fill = Dataset)) +
+  geom_bar(aes(fill = Dataset), stat = "identity", position = position_dodge())
+dev.off()
+ 
+#bar graph with NA=1
+pdf(file = "dfFULL_1NA_found.pdf", width=10, height = 7)
+ggplot(data = data_NAs, 
+       aes(x=Dataset,y=NA1,fill = Dataset)) +
+  geom_bar(aes(fill = Dataset), stat = "identity", position = position_dodge())
+dev.off()
+```
+
+# PCA of all concatenated data
+data 9 and 19 (cing gyrus) are not included.
+Formatted data; cut-off of 20% NA (no imputation), log2 conversion, median and scaled data. 
+Drop NA before and after concatenating dfs - the most conservative approach. 533 distinct protein IDs shared between all samples/datasets. 
+
+Preparation of concatenated table for PCA
+```{r}
+data1_pca = read.delim("../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data1melted_HayturalOML.txt")
+data2_pca = read.delim("../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data2melted_LTSSWFC.txt")
+data3_pca = read.delim("../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data3melted_LTSSWHIP.txt")
+data4_pca = read.delim("../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data4melted_BereczkiBA9.txt")
+data5_pca = read.delim("../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data5melted_RezeliEC_formattedNOEBB.txt")
+data6_pca = read.delim("../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data6melted_Rezeli_noEBB.txt") 
+data7_pca = read.delim("../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data7melted_RezeliPHC_NOEBB.txt")
+data8_pca = read.delim("../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data8melted_RezeliPHC_NOEBB.txt") 
+data10_pca = read.delim("../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data10melted_PingBA9.txt")
+data11_pca = read.delim("../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data11melted_JohnsonBA9noAsymAD_noAbeta.txt")
+data12_pca = read.delim("../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data12melted_Johnson_BA9consensus_noAsymAD_formattedMEDIAN.txt")
+data13_pca = read.delim("../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data13melted_MayoTC_formattedMEDIAN.txt")
+data14_pca = read.delim("../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data14melted_UPennBA9.txt")
+data15_pca = read.delim("../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data15melted_Wang_BannerFC.txt")
+data16_pca = read.delim("../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data16melted_ZhangFC.txt")
+data17_pca = read.delim("../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data17melted_UnwinHIP.txt")
+data18_pca = read.delim("../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data18melted_UnwinEC.txt")
+data20_pca = read.delim("../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/data20melted_Wang_MSinaiFC.txt")
+
+#order: dataset, sample, protein, intensities, group, brain region, labeling
+df_full = data.frame()
+
+for( df in list(data1_pca, data2_pca, data3_pca, data4_pca, data5_pca, data6_pca, data7_pca, data8_pca, data10_pca, data11_pca, data12_pca, data13_pca, data14_pca, data15_pca, data16_pca, data17_pca, data18_pca, data20_pca)){
+  df_full =rbind(df_full, df)
+}
+
+write.table(df_full, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/dfFULL_all_log2int_filtered_Median_scaled_noAsymAD-EBB-MCI.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+```
+
+PCA metadata and numeric data prep. 
+Sample distributions.
+```{r}
+#df_full = read.delim("../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/dfFULL_exceptCGdata_log2int_filtered_Median_scaled_noAsymAD-EBB-MCI.txt")
+
+#reshape - transpose
+df_full_wide = dcast(df_full, dataset + sample + group + brain.region + labeling + lysis ~ protein, value.var="intensities")  #rows are samples, columns are proteins + metadata
+
+metadata_columns=c('dataset','sample','group','brain.region', 'labeling', 'lysis')   #for PCA, you need to separate metadata from columns that are numeric
+temp_meta=df_full_wide[,metadata_columns]
+temp_numeric=df_full_wide[,
+                       !colnames(df_full_wide) %in% metadata_columns   #columns (prots) of temp_DF NOT IN metadata_columns
+                       ]
+which(is.na(temp_numeric))
+  
+#drop proteins with any NA.
+temp_numeric=temp_numeric[,colSums(is.na(temp_numeric))==0] #only columns with 0 NA 
+
+#write.table(temp_numeric, file = "../data/formatted_melted_log2/7Dec_melted_individualsampleinfo/dfFULL_tempnumeric_533variableswithnoNA_exceptCGdata_log2int_filtered_Median_scaled_noAsymAD-EBB-MCI.txt", row.names = TRUE, quote = FALSE, sep = "\t")
+
+###################### PCA via prcomp 
+## get_xxxx - summary 
+## fviz_xxxx - visualize the samples and variables on the coordinates. 
+
+PCAdf_full = prcomp (temp_numeric, scale = TRUE)
+
+#PCA:group
+pdf(file = "../results/PCA_fulldata/7Dec_exceptCGdata/PCAgroup_dfFULL_noCGdata_0NAinfinal_noAsymAD-EBB-MCI_533proteins_26Jan.pdf", width =8, height=6)
+fviz_pca_ind(PCAdf_full, 
+             geom.ind = c("point"),
+             pointsize = 1.5,
+             addEllipses = TRUE,
+             xlim = c(-90, 90),
+             ylim = c(-30, 30),
+             col.ind = temp_meta$group,
+             title = "globalPCA_dfFULL18_except9-19_0NAinFinal_noAsymAD-EBB-MCI")
+dev.off()
+
+#PCA:dataset
+pdf(file = "../results/PCA_fulldata/7Dec_exceptCGdata/PCAdataset_dfFULL_noCGdata_0NAinfinal_noAsymAD-EBB-MCI_533proteins_26Jan.pdf", width =8, height=6)
+fviz_pca_ind(PCAdf_full,
+             geom.ind = c("point"),
+             pointsize = 1.5,
+             addEllipses = TRUE,
+             xlim = c(-90, 90),
+             ylim = c(-30, 30),
+             col.ind = temp_meta$dataset,
+             title = "globalPCA_dfFULL18_except9-19_0NAinFinal_noAsymAD-EBB-MCI") + 
+  scale_shape_manual(values = c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18))
+dev.off()
+
+#PCA:labeling
+pdf(file = "../results/PCA_fulldata/7Dec_exceptCGdata/PCAlabeling_dfFULL_noCGdata_0NAinfinal_noAsymAD-EBB-MCI_533proteins_26Jan.pdf", width =8, height=6)
+fviz_pca_ind(PCAdf_full,
+             geom.ind = c("point"),
+             pointsize = 1.5,
+             addEllipses = TRUE,
+             xlim = c(-90, 90),
+             ylim = c(-30, 30),
+             col.ind = temp_meta$labeling,
+             title = "globalPCA_dfFULL18_except9-19_0NAinFinal_noAsymAD-EBB-MCI")
+dev.off()
+  
+#PCA:brain.region
+pdf(file = "../results/PCA_fulldata/7Dec_exceptCGdata/PCAbrain.region_dfFULL_noCGdata_0NAinfinal_noAsymAD-EBB-MCI_533proteins_26Jan.pdf", width =8, height=6)
+fviz_pca_ind(PCAdf_full,
+             geom.ind = c("point"),
+             pointsize = 1.5,
+             addEllipses = TRUE,
+             xlim = c(-90, 90),
+             ylim = c(-30, 30),
+             col.ind = temp_meta$brain.region,
+             title = "globalPCA_dfFULL18_except9-19_0NAinFinal_noAsymAD-EBB-MCI")
+dev.off()
+
+#PCA:lysis
+pdf(file = "../results/PCA_fulldata/7Dec_exceptCGdata/PCAlysis_dfFULL_noCGdata_0NAinfinal_noAsymAD-EBB-MCI_533proteins_26Jan.pdf", width =8, height=6)
+fviz_pca_ind(PCAdf_full,
+             geom.ind = c("point"),
+             pointsize = 1.5,
+             addEllipses = TRUE,
+             xlim = c(-90, 90),
+             ylim = c(-30, 30),
+             col.ind = temp_meta$lysis,
+             title = "globalPCA_dfFULL18_except9-19_0NAinFinal_noAsymAD-EBB-MCI")
+dev.off()
+```
+
+Variables.
+```{r}
+fviz_pca_var(PCAdf_full,
+             col.var = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+             )
+
+#Results for variables
+res.var = get_pca_var(PCAdf_full)
+contributions = as.data.frame(res.var$contrib)
+
+#res.var$coord  Coordinates  -->  var.coord = loadings * the component standard deviations
+#res.var$contrib  Contributions to the PCs  --> The contribution of a variable to a given principal component is (in percentage): (var.cos2 * 100) / (total cos2 of the component)
+#res.var$cos2 Quality of representation  -->  var.coord^2
+```
+
+PCA bioplot.
+```{r}
+### 10 highest contributions on dim1
+dim1_10highest=row.names(contributions[order(contributions$Dim.1, decreasing = T),])[1:10]
+### 10 highest on dim2
+dim2_10highest=row.names(contributions[order(contributions$Dim.2, decreasing = T),])[1:10]
+
+pdf(file = "../results/PCA_fulldata/7Dec_exceptCGdata/PCABIPLOT_dfFULL_noCGdata_0NAinfinal_noAsymAD-EBB-MCI_533proteins.pdf", width =8, height=6)
+fviz_pca_biplot(
+  PCAdf_full,
+  col.var = "contrib", # Color by contributions to the PC
+  gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+  repel = F,     # Avoid text overlapping
+  geom.ind = c("point"),
+  pointsize = 1.5,
+  col.ind = "grey30",
+  addEllipses = F,
+  xlim = c(-90, 90),
+  ylim = c(-30, 30),
+  select.var = list(name=c(dim1_10highest, dim2_10highest))
+)
+dev.off()
+```
+
+# Random-effects-model  
+## Data prep
+use the formatted data called dataX_log2: 20% NA is allowed per group, log2 conversion, median and scale. 
+prepare input data: compute mean, SD and N per group per study.
+```{r}
+# We will loop through the DFs by position. This way, we can loop through the dataset names too and output them as we go along
+list_dfs=list(data1_log2, data2_log2, data3_log2, data4_log2, data5_log2, data6_log2, data7_log2, data8_log2, data10_log2, data11_log2, data12_log2, data13_log2, data14_log2, data15_log2, data16_log2, data17_log2, data18_log2, data20_log2
+              )
+list_names=c("data1", "data2", "data3", "data4", "data5", "data6", "data7", "data8", "data10", "data11", "data12", "data13", "data14", "data15", "data16", "data17", "data18", "data20"
+             )
+  
+compute_protein_stats=function(dataframe_in, dataset_name_in){#dataset_name_in is used for the output name for the file output
+  
+  data_input = dataframe_in
+  
+  # find groups of columns
+  my_cols=colnames(data_input)
+  # delete numbers of column names to find unique groups
+  groups_in_cols=unique(gsub('\\d+','',my_cols))
+  
+  protein_list=row.names(data_input)
+  
+  if(any(duplicated(protein_list))){
+    print('Duplicated proteins found:')
+    print(protein_list[duplicated(protein_list)])
+    print('Stopping....')
+    return()
+  }
+  
+  df_to_output=data.frame(stringsAsFactors = F)
+  print(row.names(dataframe_in)[1])
+  for(protein_id in protein_list){
+    data_protein=data_input[protein_id,]  ### running for only 1 protein
+    
+    
+    # if C is in columns, process it
+    if(any(grepl('^C',my_cols))){
+      cols_C=my_cols[grep('^C',my_cols)]
+      C_df=data_protein[,cols_C]  #<<<< only 1 protein
+
+      Mean_C = mean(as.matrix(C_df), na.rm = TRUE) #calculate rowMeans in those positions
+      N_C = length(cols_C) #add number of control cases in a new column
+      SD_C = sd(C_df, na.rm = TRUE)#calculate SD of C
+
+      vec_ctrl=c(Mean_C, N_C, SD_C)
+    } else { #If no C in columns, return an empty vector for that protein
+      vec_ctrl=c(NA, NA, NA)
+    }
+
+    # if AD is in columns, process it
+    if(any(grepl('AD',my_cols))){ #find if 'AD' is part of column names
+      cols_AD=my_cols[grep('AD',my_cols)]
+      AD_df=data_protein[,cols_AD] #df with columns of AD group
+
+      Mean_AD = mean(as.matrix(AD_df), na.rm = TRUE)#calculate rowMeans in AD
+      N_AD = length(cols_AD) #add number of AD cases in a new column
+      SD_AD = sd(AD_df, na.rm = TRUE) #calculate SD of AD
+
+      vec_AD=c(Mean_AD, N_AD, SD_AD)
+    } else { #if no AD column
+      vec_AD=c(NA, NA, NA)
+    }
+
+    out=t(data.frame(c(vec_ctrl, vec_AD))) #concatenate all vectors
+    row.names(out)=protein_id
+    # print(out)
+    df_to_output=rbind(df_to_output, out)
+  }
+  
+  colnames(df_to_output)=c("Mean_C","N_C","SD_C","Mean_AD","N_AD", "SD_AD")
+  print(paste0("Outputing:  ../data/",dataset_name_in,".txt"))
+  write.table(df_to_output, file = paste0("../data/",dataset_name_in,".txt"), row.names = TRUE, quote = FALSE, sep = "\t" )
+}
+
+compute_protein_stats(list_dfs[[1]], list_names[1])
+for(i in seq(1, length(list_dfs))){
+  print(head(list_dfs[i]))
+  print(list_names[i])
+  compute_protein_stats(list_dfs[[i]], list_names[i])
+}
+```
+List all
+```{r}
+list_dfs[[1]]
+```
+
+add reference (study) and protein names as columns into input data. remove col names.  
+```{r}
+data1_input = read.delim("../data/RandomEffectModel/Input/data_prep/data1.txt")
+data2_input = read.delim("../data/RandomEffectModel/Input/data_prep/data2.txt")
+data3_input = read.delim("../data/RandomEffectModel/Input/data_prep/data3.txt")
+data4_input = read.delim("../data/RandomEffectModel/Input/data_prep/data4.txt")
+data5_input = read.delim("../data/RandomEffectModel/Input/data_prep/data5.txt")
+data6_input = read.delim("../data/RandomEffectModel/Input/data_prep/data6.txt")
+data7_input = read.delim("../data/RandomEffectModel/Input/data_prep/data7.txt")
+data8_input = read.delim("../data/RandomEffectModel/Input/data_prep/data8.txt")
+data10_input = read.delim("../data/RandomEffectModel/Input/data_prep/data10.txt")
+data11_input = read.delim("../data/RandomEffectModel/Input/data_prep/data11.txt")
+data12_input = read.delim("../data/RandomEffectModel/Input/data_prep/data12.txt")
+data13_input = read.delim("../data/RandomEffectModel/Input/data_prep/data13.txt")
+data14_input = read.delim("../data/RandomEffectModel/Input/data_prep/data14.txt")
+data15_input = read.delim("../data/RandomEffectModel/Input/data_prep/data15.txt")
+data16_input = read.delim("../data/RandomEffectModel/Input/data_prep/data16.txt")
+data17_input = read.delim("../data/RandomEffectModel/Input/data_prep/data17.txt")
+data18_input = read.delim("../data/RandomEffectModel/Input/data_prep/data18.txt")
+data20_input = read.delim("../data/RandomEffectModel/Input/data_prep/data20.txt")
+
+data1_input$reference = c("Data1_Haytural2020")
+data2_input$reference = c("Data2_Schedin-Weiss2020")
+data3_input$reference = c("Data3_Schedin-Weiss2020")
+data4_input$reference = c("Data4_Bereczki2018")
+data5_input$reference = c("Data5_Mendonca2019")
+data6_input$reference = c("Data6_Mendonca2019")
+data7_input$reference = c("Data7_Mendonca2019")
+data8_input$reference = c("Data8_Mendonca2019")
+data10_input$reference = c("Data10_Ping2018")
+data11_input$reference = c("Data11_Johnson2018")
+data12_input$reference = c("Data12_Johnson2020")
+data13_input$reference = c("Data13_Johnson2020")
+data14_input$reference = c("Data14_Johnson2020")
+data15_input$reference = c("Data15_Bai2019")
+data16_input$reference = c("Data16_Zhang2018")
+data17_input$reference = c("Data17_Xu2019")
+data18_input$reference = c("Data18_Xu2019")
+data20_input$reference = c("Data20_Bai2019")
+
+data1_input$protein = row.names(data1_input)
+row.names(data1_input) = NULL
+
+data2_input$protein = row.names(data2_input)
+row.names(data2_input) = NULL
+
+data3_input$protein = row.names(data3_input)
+row.names(data3_input) = NULL
+
+data4_input$protein = row.names(data4_input)
+row.names(data4_input) = NULL
+
+data5_input$protein = row.names(data5_input)
+row.names(data5_input) = NULL
+
+data6_input$protein = row.names(data6_input)
+row.names(data6_input) = NULL
+
+data7_input$protein = row.names(data7_input)
+row.names(data7_input) = NULL
+
+data8_input$protein = row.names(data8_input)
+row.names(data8_input) = NULL
+
+data10_input$protein = row.names(data10_input)
+row.names(data10_input) = NULL
+
+data11_input$protein = row.names(data11_input)
+row.names(data11_input) = NULL
+
+data12_input$protein = row.names(data12_input)
+row.names(data12_input) = NULL
+
+data13_input$protein = row.names(data13_input)
+row.names(data13_input) = NULL
+
+data14_input$protein = row.names(data14_input)
+row.names(data14_input) = NULL
+
+data15_input$protein = row.names(data15_input)
+row.names(data15_input) = NULL
+
+data16_input$protein = row.names(data16_input)
+row.names(data16_input) = NULL
+
+data17_input$protein = row.names(data17_input)
+row.names(data17_input) = NULL
+
+data18_input$protein = row.names(data18_input)
+row.names(data18_input) = NULL
+
+data20_input$protein = row.names(data20_input)
+row.names(data20_input) = NULL
+
+###### double check sd use the formatted df from metadata_input folder 
+data1_formatted_c = data1_formatted[,1:5]
+data1_sd = apply(data1_formatted_c, 1, FUN = sd, na.rm = TRUE)
+data1_formatted_c$SD = data1_sd
+
+data1_formatted_ad = data1_formatted[,6:10]
+data1_sd_ad = apply(data1_formatted_ad, 1, FUN = sd, na.rm = TRUE)
+data1_formatted_ad$sd = data1_sd_ad
+```
+
+Concatenate input dfs - final tables 
+```{r}
+#### 1) Labeled data input:
+labeled_data_input = data.frame()
+for( df in list(data1_input, data2_input, data3_input, data4_input, data10_input, data11_input, data15_input, 
+                data17_input, data18_input, data20_input
+                )){
+labeled_data_input = rbind(labeled_data_input, df)
+}
+
+write.table(labeled_data_input, file = "../data/RandomEffectModel/Input/FinalTables/Labeled_data_18Dec.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+
+#### 2) Label-free data input:
+lfq_data_input = data.frame()
+for( df in list(data5_input, data6_input, data7_input, data8_input, data12_input, data13_input, data14_input,
+                data16_input)){
+lfq_data_input = rbind(lfq_data_input, df)
+}
+
+write.table(lfq_data_input, file = "../data/RandomEffectModel/Input/FinalTables/Lfq_data.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+```
+
+## Random effects model - Run analysis
+estimator: DL
+sm: SMD 
+input tables are transferred via filezilla and located in the folder called data. 
+### LFQ metaanalysis(8 data)
+```{r}
+lfq_metaanalysis = read.table("../data/lfq_data.txt")
+
+all_proteins=as.character(unique(lfq_metaanalysis$protein))
+all_random_models=data.frame()
+for(protein_id in all_proteins){
+  temp = lfq_metaanalysis[lfq_metaanalysis$protein==protein_id,]
+  rand_eff_mod=metacont(
+            N_AD, Mean_AD, SD_AD,
+            N_C, Mean_C, SD_C,
+            data = temp,
+            studlab = paste(reference),
+            comb.fixed = FALSE,
+            comb.random = TRUE,
+            method.tau = "DL",
+            hakn = FALSE,
+            prediction = TRUE,
+            sm = "SMD"
+            )
+  
+  out=as.data.frame(rand_eff_mod[c("TE.random", "lower.random","upper.random","pval.random","seTE.random", "zval.random", "k", "Q", "tau2", "tau", "I2")])
+  out$protein=protein_id
+  
+  all_random_models=rbind(all_random_models, out)
+}
+
+all_random_models$FDR=p.adjust(all_random_models$pval.random, method='BH')
+
+write.table(all_random_models, file= "../results/Unique_output/LFQ_metaanalysis_14Dec_DLloop_SMD.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+```
+
+### Labeled metanalysis (10 data)
+```{r}
+labeled_metaanalysis = read.table("../data/Labeled_data_18Dec.txt")
+
+all_proteins=as.character(unique(labeled_metaanalysis$protein))
+all_random_models=data.frame()
+for(protein_id in all_proteins){
+  temp = labeled_metaanalysis[labeled_metaanalysis$protein==protein_id,]
+  rand_eff_mod=metacont(
+            N_AD, Mean_AD, SD_AD,
+            N_C, Mean_C, SD_C,
+            data = temp,
+            studlab = paste(reference),
+            comb.fixed = FALSE,
+            comb.random = TRUE,
+            method.tau = "DL",
+            hakn = FALSE,
+            prediction = TRUE,
+            sm = "SMD"
+            )
+  
+  out=as.data.frame(rand_eff_mod[c("TE.random", "lower.random","upper.random","pval.random","seTE.random", "zval.random", "k", "Q", "tau2", "tau", "I2")])
+  out$protein=protein_id
+  
+  all_random_models=rbind(all_random_models, out)
+}
+
+all_random_models$FDR=p.adjust(all_random_models$pval.random, method='BH')
+
+write.table(all_random_models, file= "../results/Unique_output/18Dec_LABELED_metaanalysis_10data_DLloop_SMD.txt", row.names = TRUE, quote = FALSE, sep = "\t" )
+```
+
+# Meta-analysis results: Find significantly altered proteins (FDR < 10%) 
+Venn diagram: number of ALL distinct protein IDs and FDR<10%. 
+Find proteins with consistent alterations across datasets. From output df find proteins with FDR<10% and extract their FC from the meta-analysis input file. 
+Heatmap: 33 proteins (with distinct protein IDs) followed the sme directional changes 
+Enrichment analysis: piano. GO BP, reactome and Kegg databases. 
+## Venn diagrams
+```{r}
+lfq_output = read.table("../data/RandomEffectModel/Output/LFQ_metaanalysis_14Dec_DLloop_SMD.txt")
+lfq_FDR10 = lfq_output[abs(lfq_output$FDR) < 0.1, ]
+lab_output = read.table("../data/RandomEffectModel/Output/18Dec_LABELED_metaanalysis_10data_DLloop_SMD.txt")
+lab_FDR10 = lab_output[abs(lab_output$FDR) < 0.1, ]
+
+set1 = c(lab_FDR10$protein)
+set2 = c(lfq_FDR10$protein)
+colors = c("#6666ff", "#ffff66")
+
+FDRproteins = venn.diagram(x = list(set1, set2), 
+             category.names = c("Labeled", "Label-free"),
+             filename = NULL,
+             output = TRUE, 
+             imagetype = "png",
+             height = 480, width = 480, 
+             resolution = 300,
+             compression = "zip",
+             scaled = TRUE, 
+             col = "black",
+             fill = colors,
+             lwd = 0.8, 
+             cex = 0.7,
+             fontfamily = "sans",
+             cat.cex = 0.5,
+             cat.default.pos = "outer",
+             cat.pos = c(-30, 30),
+             cat.dist = c(0.1, 0.1),
+             cat.fontfamily = "sans",
+             cat.cols = "black", 
+             margin = 0.05)
+
+set1 = c(lab_output$protein)
+set2 = c(lfq_output$protein)
+colors = c("#6666ff", "#ffff66")
+
+ALLproteins = venn.diagram(x = list(set1, set2), 
+             category.names = c("Labeled", "Label-free"),
+             filename = NULL,
+             output = TRUE, 
+             imagetype = "png",
+             height = 480, width = 480, 
+             resolution = 300,
+             compression = "zip",
+             scaled = TRUE, 
+             col = "black",
+             fill = colors,
+             lwd = 0.8, 
+             cex = 0.7,
+             fontfamily = "sans",
+             cat.cex = 0.5,
+             cat.default.pos = "outer",
+             cat.pos = c(-30, 30),
+             cat.dist = c(0.1, 0.1),
+             cat.fontfamily = "sans",
+             cat.cols = "black", 
+             margin = 0.05)
+
+library(grDevices)
+pdf(file="../data/RandomEffectModel/Output/FDR10proteins_venn_scaled.pdf")
+    grid.draw(FDRproteins)
+dev.off()
+```
+
+## Heatmaps 
+Common proteins between LFQ and LABELED metaanalysis results.
+Venn diagram: 71 shared proteins - but direction of change across studies was not take into account. 
+Find proteins with consistent changes both in labeled and label-free data --> 33 proteins (the most robust changes in AD). 
+```{r}
+#lfq_data_input = read.table("../data/RandomEffectModel/Input/FinalTables/Lfq_data.txt")
+#lab_data_input = read.table("../data/RandomEffectModel/Input/FinalTables/Labeled_data_18Dec.txt")
+shared_proteins = lfq_FDR10[lfq_FDR10$protein %in% lab_FDR10$protein, c("protein", "TE.random")]
+
+#labeled data - compute FC 
+lab_data_input_71shared = lab_data_input[lab_data_input$protein %in% shared_proteins$protein, c("reference","protein", "Mean_C", "Mean_AD")]
+
+lab_data_input_71shared$FC = lab_data_input_71shared$Mean_AD - lab_data_input_71shared$Mean_C
+lab_data_input_71sharedwide = dcast(lab_data_input_71shared, protein ~ reference, value.var="FC")  #rows are proteins, columns are studies
+
+#lfq data - compute FC 
+lfq_data_input_71shared = lfq_data_input[lfq_data_input$protein %in% shared_proteins$protein, c("reference","protein", "Mean_C", "Mean_AD")]
+
+lfq_data_input_71shared$FC = lfq_data_input_71shared$Mean_AD - lfq_data_input_71shared$Mean_C
+lfq_data_input_71sharedwide = dcast(lfq_data_input_71shared, protein ~ reference, value.var="FC")  #rows are proteins, columns are studies
+
+#merge lab and lfq dfs 
+shared71 = merge(lab_data_input_71sharedwide, lfq_data_input_71sharedwide, by = "protein")
+row.names(shared71) = shared71$protein
+shared71 = shared71 [,-c(1)]
+
+write.table(shared71, file="../data/RandomEffectModel/Output/shared71proteins_lab_lfq_DL-SMD_FDR10.txt", row.names=TRUE, quote = FALSE, sep = "\t" )
+
+robust33 = read.delim("../data/RandomEffectModel/Output/Output_FindConsistentUsingInput_FC/Consistent_final/Labeled_Lfq_DL_SMD_FDR0.10_k1ormore_33commonproteins_genenames.txt")
+
+robust33[is.na(robust33)] = 0
+row.names(robust33) = robust33$gene.name
+robust33 = robust33[, -c(1:3)]
+
+#########HEATMAP 
+library(RColorBrewer)
+paletteLength <- 100
+#col.pal = colorRampPalette(rev(brewer.pal(n = 11, name = "RdBu")))(paletteLength)
+col.pal = colorRampPalette(c('blue3','white','red2'))(paletteLength)
+
+myBreaks <- c(
+  seq(-1, -0.05, length.out=50),
+  seq(0.05, 1, length.out=50)
+)
+
+### Annotations for the heatmap - order of the datasets: labeled -> label-free 1, 10, 11, 15, 17, 18, 2, 20, 3, 4, 12, 13, 14, 16, 5, 6, 7, 8. 
+metadata = data.frame(sample.size = c("= 10", "= 20", "= 33", "= 33", "10-20", "10-20", "= 10" , "= 62", "= 10", "10-20", "> 300", "95-115", "95-115", "10-20", "10-20", "10-20", "10-20", "10-20"))
+row.names(metadata)  = colnames(robust33)
+
+metadata$lysis = c("SDS", "Urea", "Urea", "Urea", "SDS", "SDS", "Urea", "Urea", "Urea", "SDS", "Urea", "Urea", "Urea", "SDS", "Urea", "Urea", "Urea", "Urea")
+
+metadata$brain.region = c("TL", "FL", "FL", "FL", "TL", "TL", "FL", "FL", "TL", "FL", "FL", "TL", "FL", "FL", "TL", "FL", "TL", "TL")
+
+metadata$labeling = c("labeled", "labeled", "labeled", "labeled", "labeled", "labeled", "labeled", "labeled", "labeled", "labeled", "label-free", "label-free", "label-free", "label-free", "label-free", "label-free", "label-free", "label-free")
+
+my_color = list(
+  sample.size = c("= 10" = "#ccffcc", "10-20" = "#99ff33", "= 20" = "#66cc33",  "= 33" = "#339900", "= 62" = "#336600", "95-115" = "#006600", "> 300" = "#003300"), 
+  brain.region = c("TL" = "#ffcc99" , "FL" = "#cc6600"), 
+  lysis = c("SDS" = "#ffccff" , "Urea" = "#cc33cc"), 
+  labeling = c("labeled" = "#6666ff", "label-free" = "#ffff66")
+  )
+
+pheatmap(robust33,
+        color = col.pal,
+        border_color = "grey95",
+        breaks = myBreaks,
+        clustering_distance_rows = "euclidean",
+        clustering_distance_cols = "euclidean", 
+        clustering_method = "ward.D2",
+        annotation_colors = my_color,
+        annotation_col = metadata,
+        fontsize_row = 7,
+        fontsize_col = 7,
+        cellwidth = 10, cellheight = 10,
+        main = "33commonproteins_labeled_lfq_merged_DL_SMD_FDR10",
+        filename = "../data/RandomEffectModel/Output/33commonproteins_merged_labeled_lfq_DL_SMD_FDR10_BOTH_lim-1_1.pdf"
+        )
+```
+
+## BP using piano
+Prepare the input df. the meta-analysis results include protein-centric info, meaning isoforms. In addition different uniprot accesssion numbers can belong to the same gene. 
+columns needed: protein, TE.random, pval, FDR, k, lower.random, upper.random, Q 
+1. new column remove the isoform info "-XX"
+2. find duplicates and check whether the direction of change is same. 
+3. sort by pval and keep the most significant pval (remove the least significant one). 
+4. remove the IDs with inconsistent mean dif. 
+5. Uniprot ID conversion - get unique (primary) gene name 
+6. If exists, remove the obsolete entries. 
+7. sort them by gene name and remove the entries with the same gene name. (again keep the more significant pval)
+
+lfq data prep 
+```{r}
+lfq_all = read.delim("../data/RandomEffectModel/Output/LFQ_metaanalysis_14Dec_DLloop_SMD.txt")
+lfq_all$uniprot.input = gsub("-.*","",lfq_all$protein)        #remove the isoform details
+lfq_all = lfq_all[, c("protein", "uniprot.input","TE.random", "pval.random", "FDR", "k", "lower.random", "upper.random", "Q")]
+
+# find duplicates. 
+# 1) remove all duplicates from the all proteins. new df called lfq_nodup 2868 proteins.
+# 2) divide the data with all duplicates into up and downreg. then remove the duplicates with the highest pval in each data. 
+# 3) merg up and downreg data (dups with same direction of change is removed), the only duplicates will be the ones with inconsistent changes.
+# 4) remove the inconsistent changes from the duplicated df. 439 proteins left. 
+# 5) merge this df with lab_nodup from step1 3307 proteins 
+lfq_dup = lfq_all[duplicated(lfq_all$uniprot.input),]
+lfq_dup = lfq_all[lfq_all$uniprot.input %in% lfq_dup$uniprot.input, ]
+
+total_dup = c (lfq_dup$uniprot.input)
+nodup = lfq_all[! lfq_all$uniprot.input %in% total_dup, ] # remove all 1424 duplicates from all proteins. 
+
+dup_up = lfq_dup[lfq_dup$TE.random > 0,]
+dup_up = dup_up[order(dup_up$pval.random),]
+dup_up_unique = dup_up[!duplicated(dup_up$uniprot.input, fromLast = FALSE),]
+
+dup_dn = lfq_dup[lfq_dup$TE.random < 0,]
+dup_dn = dup_dn[order(dup_dn$pval.random),]
+dup_dn_unique = dup_dn[!duplicated(dup_dn$uniprot.input, fromLast = FALSE),]
+
+# merge the data 
+unique = data.frame()
+for( df in list(dup_up_unique, dup_dn_unique)){
+  unique =rbind(unique, df)
+}
+
+#sort by uniprot.name - find duplicates with inconsistent expression 
+unique = unique[order(unique$uniprot.input),]
+unique_incons = unique[duplicated(unique$uniprot.input),]
+
+# remove the duplicated IDs called inconsis
+unique_cleaned = unique[! unique$uniprot.input %in% unique_incons$uniprot.input, ]
+
+# merge unique_cleaned and nodup
+cleaned = data.frame()
+for( df in list(unique_cleaned, nodup)){
+  cleaned =rbind(cleaned, df)
+}
+
+# save as txt. ID conversion from uniprot.input to gene.name
+write.table(cleaned, file="../data/RandomEffectModel/Output/PathwayAnalysis/DataPrep/2Feb_Lfq_cleaned_3307proteins.txt", row.names=TRUE, quote = FALSE, sep = "\t" )
+
+## Next step: continue from the cleaned table. check for duplicates one more time, since different uniprotID might belong to the same gene.name. 3295 genes. 
+cleaned_geneID = read.delim("../data/RandomEffectModel/Output/PathwayAnalysis/DataPrep/2Feb_Lfq_cleaned_3307proteins_gene.name.txt")
+
+
+cleaned_geneIDdup = cleaned_geneID[duplicated(cleaned_geneID$gene.name),] #find duplicated gene.names 
+cleaned_geneIDdup = cleaned_geneID[cleaned$gene.name %in% cleaned_geneIDdup$gene.name, ] #extract all duplicated rows (same gene.name)
+
+cleaned_geneID_nodup = cleaned_geneID[! cleaned_geneID$gene.name %in% cleaned_geneIDdup$gene.name, ] # remove all 90 duplicates from all proteins - cleaned data --> 3205 genes 
+
+geneIDdup_up = cleaned_geneIDdup[cleaned_geneIDdup$TE.random > 0,]
+geneIDdup_up = geneIDdup_up[order(geneIDdup_up$pval.random),]
+geneIDdup_up_unique = geneIDdup_up[!duplicated(geneIDdup_up$gene.name, fromLast = FALSE),]
+
+geneIDdup_dn = cleaned_geneIDdup[cleaned_geneIDdup$TE.random < 0,]
+geneIDdup_dn = geneIDdup_dn[order(geneIDdup_dn$pval.random),]
+geneIDdup_dn_unique = geneIDdup_dn[!duplicated(geneIDdup_dn$gene.name, fromLast = FALSE),]
+
+# merge the data. 54 proteins
+geneIDdup_unique = data.frame()
+for( df in list(geneIDdup_up_unique, geneIDdup_dn_unique)){
+  geneIDdup_unique =rbind(geneIDdup_unique, df)
+}
+
+#sort by uniprot.name - find duplicates with inconsistent expression 
+geneIDdup_unique = geneIDdup_unique[order(geneIDdup_unique$gene.name),]
+geneIDdup_unique_incons = geneIDdup_unique[duplicated(geneIDdup_unique$gene.name),]
+
+# remove the duplicated IDs called inconsis.
+geneIDdup_unique_cleaned = geneIDdup_unique[! geneIDdup_unique$gene.name %in% geneIDdup_unique_incons$gene.name, ]
+
+# merge unique_cleaned and cleaned_nodup. 3205 + 32 = 3237 genes - final. 
+lfq_gene_final = data.frame()
+for( df in list(geneIDdup_unique_cleaned, cleaned_geneID_nodup)){
+  lfq_gene_final =rbind(lfq_gene_final, df)
+}
+
+# save as txt. ID conversion from uniprot.input to gene.name
+write.table(lfq_gene_final, file="../data/RandomEffectModel/Output/PathwayAnalysis/Input/2Feb_lfq_3237genes_final.txt", row.names=TRUE, quote = FALSE, sep = "\t" )
+
+```
+
+Labeled data prep 
+```{r}
+lab_all = read.delim("../data/RandomEffectModel/Output/18Dec_LABELED_metaanalysis_10data_DLloop_SMD.txt")
+lab_all$uniprot.input = gsub("-.*","",lab_all$protein)        #remove the isoform details
+lab_all = lab_all[, c("protein", "uniprot.input","TE.random", "pval.random", "FDR", "k", "lower.random", "upper.random", "Q")]
+
+# find duplicates. 
+# 1) remove all duplicates from the all proteins. new df called lab_nodup 12432 proteins
+# 2) divide the data with all duplicates into up and downreg. then remove the duplicates with the highest pval in each data. 
+# 3) merg up and downreg data (dups with same direction of change is removed), the only duplicates will be the ones with inconsistent changes.
+# 4) remove the inconsistent changes from the duplicated df. 1367 proteins left. 
+# 5) merge this df with lab_nodup from step1 13799 proteins. 
+lab_dup = lab_all[duplicated(lab_all$uniprot.input),]
+lab_dup = lab_all[lab_all$uniprot.input %in% lab_dup$uniprot.input, ]
+
+total_dup = c (lab_dup$uniprot.input)
+lab_nodup = lab_all[! lab_all$uniprot.input %in% total_dup, ] # remove all 4864 duplicates from all proteins. 
+
+lab_dup_up = lab_dup[lab_dup$TE.random > 0,]
+lab_dup_up = lab_dup_up[order(lab_dup_up$pval.random),]
+lab_dup_up_unique = lab_dup_up[!duplicated(lab_dup_up$uniprot.input, fromLast = FALSE),]
+
+lab_dup_dn = lab_dup[lab_dup$TE.random < 0,]
+lab_dup_dn = lab_dup_dn[order(lab_dup_dn$pval.random),]
+lab_dup_dn_unique = lab_dup_dn[!duplicated(lab_dup_dn$uniprot.input, fromLast = FALSE),]
+
+# merge the data 
+lab_unique = data.frame()
+for( df in list(lab_dup_up_unique, lab_dup_dn_unique)){
+  lab_unique =rbind(lab_unique, df)
+}
+
+#sort by uniprot.name - find duplicates with inconsistent expression 
+lab_unique = lab_unique[order(lab_unique$uniprot.input),]
+lab_unique_incons = lab_unique[duplicated(lab_unique$uniprot.input),]
+
+# remove the duplicated IDs called inconsis
+lab_unique_cleaned = lab_unique[! lab_unique$uniprot.input %in% lab_unique_incons$uniprot.input, ]
+
+# merge lab_unique_cleaned and lab_nodup
+lab_cleaned = data.frame()
+for( df in list(lab_unique_cleaned, lab_nodup)){
+  lab_cleaned =rbind(lab_cleaned, df)
+}
+
+# save as txt. ID conversion from uniprot.input to gene.name
+write.table(lab_cleaned, file="../data/RandomEffectModel/Output/PathwayAnalysis/DataPrep/1Feb_Labeled_cleaned_13799proteins.txt", row.names=TRUE, quote = FALSE, sep = "\t" )
+
+## continue from the cleaned table. check for duplicates one more time, since different uniprotID might belong to the same gene.name. 13075 genes. 
+lab_cleaned_geneID = read.delim("../data/RandomEffectModel/Output/PathwayAnalysis/DataPrep/1Feb_Labeled_cleaned_13799proteins_gene.name.txt")
+
+lab_cleaned_geneIDdup = lab_cleaned_geneID[duplicated(lab_cleaned_geneID$gene.name),] #find duplicated gene.names 
+lab_cleaned_geneIDdup = lab_cleaned_geneID[lab_cleaned_geneID$gene.name %in% lab_cleaned_geneIDdup$gene.name, ] #extract all duplicated rows (same gene.name)
+
+cleaned_dup = c(lab_cleaned_geneIDdup$gene.name)
+lab_cleaned_geneID_nodup = lab_cleaned_geneID[! lab_cleaned_geneID$gene.name %in% cleaned_dup, ] # remove all 3914 duplicates from all proteins (cleaned data with 9161 proteins).
+
+lab_geneIDdup_up = lab_cleaned_geneIDdup[lab_cleaned_geneIDdup$TE.random > 0,]
+lab_geneIDdup_up = lab_geneIDdup_up[order(lab_geneIDdup_up$pval.random),]
+lab_geneIDdup_up_unique = lab_geneIDdup_up[!duplicated(lab_geneIDdup_up$gene.name, fromLast = FALSE),]
+
+lab_geneIDdup_dn = lab_cleaned_geneIDdup[lab_cleaned_geneIDdup$TE.random < 0,]
+lab_geneIDdup_dn = lab_geneIDdup_dn[order(lab_geneIDdup_dn$pval.random),]
+lab_geneIDdup_dn_unique = lab_geneIDdup_dn[!duplicated(lab_geneIDdup_dn$gene.name, fromLast = FALSE),]
+
+# merge the data - 2203 proteins
+lab_geneIDdup_unique = data.frame()
+for( df in list(lab_geneIDdup_up_unique, lab_geneIDdup_dn_unique)){
+  lab_geneIDdup_unique =rbind(lab_geneIDdup_unique, df)
+}
+
+#sort by uniprot.name - find duplicates with inconsistent expression 
+lab_geneIDdup_unique = lab_geneIDdup_unique[order(lab_geneIDdup_unique$gene.name),]
+lab_geneIDdup_unique_incons = lab_geneIDdup_unique[duplicated(lab_geneIDdup_unique$gene.name),]
+
+# remove the duplicated IDs called inconsis
+lab_geneIDdup_unique_cleaned = lab_geneIDdup_unique[! lab_geneIDdup_unique$gene.name %in% lab_geneIDdup_unique_incons$gene.name, ]
+
+# merge unique_cleaned and lab_cleaned_nodup. 9161 + 1003 = 10164 genes - final.
+lab_gene_final = data.frame()
+for( df in list(lab_geneIDdup_unique_cleaned, lab_cleaned_geneID_nodup)){
+  lab_gene_final =rbind(lab_gene_final, df)
+}
+
+# save as txt. ID conversion from uniprot.input to gene.name
+write.table(lab_gene_final, file="../data/RandomEffectModel/Output/PathwayAnalysis/Input/1Feb_Labeled_10164genes_final.txt", row.names=TRUE, quote = FALSE, sep = "\t" )
+
+```
+
+Run piano - labeled data.
+```{r}
+### txt files are downloaded from enrichr KEGG_2019_Human, GO_Biological_Process_2018, Reactome_2016
+### GO_BP needs replace ' in go terms to avoid bugs
+### when reading the file
+for (ss in c("../data/pathway/GO_Biological_Process_2018.txt")) {
+    infile = readLines(paste0("../data/", ss))
+    outfile = gsub("'", "", infile)
+    writeLines(outfile, paste0("../data/", ss))
+}
+
+#################
+lab_pianoinput = read.delim("../data/RandomEffectModel/Output/PathwayAnalysis/Input/1Feb_Labeled_10164genes_final.txt")
+mylab_P = setNames(lab_pianoinput$pval.random, lab_pianoinput$gene.name)
+mylab_LFC = setNames(lab_pianoinput$TE.random, lab_pianoinput$gene.name)
+head(mylab_P)
+head(mylab_LFC)
+
+#### GO_BP_2018
+#file.exists("../data/pathway/go_biological_process_2018.gmt")
+BP_gmt = loadGSC("../data/pathway/go_biological_process_2018.gmt")
+lab_gsaBP = runGSA(geneLevelStats = mylab_P, directions = mylab_LFC, gsc = BP_gmt, geneSetStat = "reporter",
+               gsSizeLim = c(5, Inf), nPerm = 10000, ncpus = 1)
+
+names(lab_gsaBP)
+
+GSAsummaryTable(lab_gsaBP, save = TRUE, file = "../data/RandomEffectModel/Output/PathwayAnalysis/Results/5Feb/gsaBPoutput_Labeled_8Feb.xls")
+saveRDS(lab_gsaBP, file = "../data/RandomEffectModel/Output/PathwayAnalysis/Results/Labeled_GOBP_GSA_8Feb.rds")
+
+#### KEGG
+Kegg_gmt = loadGSC("../data/pathway/kegg_2019_human.gmt")
+lab_gsaKegg = runGSA(geneLevelStats = mylab_P, directions = mylab_LFC, gsc = Kegg_gmt, geneSetStat = "reporter",
+                 gsSizeLim = c(5, Inf), nPerm = 10000, ncpus = 1)
+
+GSAsummaryTable(lab_gsaKegg, save=TRUE, file="../data/RandomEffectModel/Output/PathwayAnalysis/Results/5Feb/gsaKeggoutput_Labeled_8Feb.xls")
+saveRDS(lab_gsaKegg, file = "../data/RandomEffectModel/Output/PathwayAnalysis/Results/Labeled_Kegg_GSA_8Feb.rds")
+```
+
+Run piano - lfq data
+```{r}
+lfq_pianoinput = read.delim("../data/RandomEffectModel/Output/PathwayAnalysis/Input/2Feb_lfq_3237genes_final.txt")
+mylfq_P = setNames(lfq_pianoinput$pval.random, lfq_pianoinput$gene.name)
+mylfq_LFC = setNames(lfq_pianoinput$TE.random, lfq_pianoinput$gene.name)
+head(mylfq_P)
+head(mylfq_LFC)
+
+#### GO_BP_2018
+lfq_gsaBP = runGSA(geneLevelStats = mylfq_P, directions = mylfq_LFC, gsc = BP_gmt, geneSetStat = "reporter",
+                   gsSizeLim = c(5, Inf), nPerm = 10000, ncpus = 1)
+
+GSAsummaryTable(lfq_gsaBP, save = TRUE, file = "../data/RandomEffectModel/Output/PathwayAnalysis/Results/5Feb/gsaBPoutput_LFQ_8Feb.xls")
+saveRDS(lfq_gsaBP, file = "../data/RandomEffectModel/Output/PathwayAnalysis/Results/LFQ_GOBP_GSA_8Feb.rds")
+
+#### KEGG
+lfq_gsaKegg = runGSA(geneLevelStats = mylfq_P, directions = mylfq_LFC, gsc = Kegg_gmt, geneSetStat = "reporter",
+                     gsSizeLim = c(5, Inf), nPerm = 10000, ncpus = 1)
+
+GSAsummaryTable(lfq_gsaKegg, save=TRUE, file="../data/RandomEffectModel/Output/PathwayAnalysis/Results/5Feb/gsaKeggoutput_LFQ_8Feb.xls")
+saveRDS(lfq_gsaKegg, file = "../data/RandomEffectModel/Output/PathwayAnalysis/Results/LFQ_Kegg_GSA_8Feb.rds")
+```
+
+network plot using KEGG 
+```{r}
+pdf(file = "../data/RandomEffectModel/Output/PathwayAnalysis/Results/5Feb/8Feb_LABELED_Kegg_top_pathways.pdf")
+networkPlot(lab_gsaKegg, class = "distinct", direction = "both", 
+            #adjusted = TRUE, significance = 0.001, 
+            #physics = F, #works in networkPlot2, 
+            geneSets = c("Complement and coagulation cascades", #up
+                         "ECM-receptor interaction",
+                         "Alzheimer disease", #down
+                         "Glutamatergic synapse",
+                         "Huntington disease",
+                         "Oxidative phosphorylation",
+                         "Parkinson disease",
+                         "Synaptic vesicle cycle",
+                         "Dopaminergic synapse",
+                         "GABAergic synapse"),
+            label = "namesAndSizes",
+            cexLabel = 0.9, 
+            lay = 4)
+dev.off()
+
+# network for KEGG - LFQ distinct both categories 
+pdf(file = "../data/RandomEffectModel/Output/PathwayAnalysis/Results/5Feb/8Feb_LFQ_Kegg_top_pathways.pdf")
+networkPlot(lfq_gsaKegg, class = "distinct", direction = "both", 
+            #adjusted = TRUE, significance = 0.001, 
+            #physics = F, #works in networkPlot2, 
+            geneSets = c("Complement and coagulation cascades", #up
+                         "ECM-receptor interaction",
+                         "Glycolysis / Gluconeogenesis",
+                         "Alzheimer disease", #down
+                         "Huntington disease",
+                         "Oxidative phosphorylation",
+                         "Parkinson disease",
+                         "Synaptic vesicle cycle"),
+            label = "namesAndSizes",
+            cexLabel = 0.9, 
+            lay = 4)
+dev.off()
+```
+
+KEGG pathview. map the altered proteins in a given pathway. 
+```{r}
+#browseVignettes("pathview")
+help(pathview)
+library(pathview)
+
+lab_pianoinput_FDR10 = lab_pianoinput[abs(lab_pianoinput$FDR) < 0.1, ]
+
+#### adding entrez id
+library(org.Hs.eg.db)
+
+mapping=select(
+  org.Hs.eg.db, 
+  keys = lab_pianoinput_FDR10$gene.name,
+  columns = c("ENTREZID", "SYMBOL"),
+  keytype = "SYMBOL")
+#if mapping and original table does not match
+#dup_entry = mapping[duplicated(mapping$SYMBOL),]
+#mapping = mapping[-c(327), ]
+if(all(lab_pianoinput_FDR10$gene.name==mapping$SYMBOL)){ ## making sure same order is given in input and output
+  lab_pianoinput_FDR10$ENTREZ=mapping$ENTREZID
+}
+
+
+#####
+lab_pianoinput_FDR10list = as.vector(lab_pianoinput_FDR10[["TE.random"]])
+names(lab_pianoinput_FDR10list) = lab_pianoinput_FDR10$ENTREZ
+
+data(demo.paths)
+data(paths.hsa)
+head(paths.hsa, 5)
+
+pv.out = pathview(gene.data = lab_pianoinput_FDR10list, cpd.data = NULL,
+                  pathway.id = c("05010","04721","05016","05012","04512", "04610"),
+                  species = "hsa", gene.idtype = "entrez", cpd.idtype = "kegg",
+                  #limit = list(gene = max(abs(lab_pianoinput_FDR10list))),
+                  out.suffix = "lab_pianoinput_FDR10list_15feb_10FDRcut-off", kegg.native = T)
+```
+
+Find significantly altered proteins in a given pathway 
+```{r}
+#### GO, chemical synaptic transmission 
+# find all proteins associated with a given gene ontology
+gsc_synapse = c(lab_gsaBP$gsc$`chemical synaptic transmission (GO:0007268)`)
+# from meta-analysis results, intersect proteins with FDR <10%. 
+lab_FDR10protein = c(lab_FDR10$protein) #line 1879
+mylab_inputFDR10 = mylab_input[mylab_input$protein %in% lab_FDR10protein, c("protein", "gene.name")]
+intersect_synapse = mylab_inputFDR10[mylab_inputFDR10$gene.name %in% gsc_synapse,]
+
+####  lfq data
+lfq_gsc_synapse = c(lfq_gsaBP$gsc$`chemical synaptic transmission (GO:0007268)`)
+lfq_FDR10protein = c(lfq_FDR10$protein) #line 1877
+mylfq_inputFDR10 = mylfq_input[mylfq_input$protein %in% lfq_FDR10protein, c("protein", "gene.name")]
+lfq_intersect_synapse = mylfq_inputFDR10[mylfq_inputFDR10$gene.name %in% lfq_gsc_synapse,]
+
+synapse_sharedproteins = intersect(intersect_synapse$gene.name, intersect_lfq_synapse$gene.name)
+
+
+#### cytokine-mediated
+# find all proteins associated with a given gene ontology
+gsc_cytokine = c(lab_gsaBP$gsc$`cytokine-mediated signaling pathway (GO:0019221)`)
+intersect_cytokine = mylab_inputFDR10[mylab_inputFDR10$gene.name %in% gsc_cytokine,]
+
+lfq_gsc_cytokine= c(lfq_gsaBP$gsc$`cytokine-mediated signaling pathway (GO:0019221)`)
+intersect_lfq_cytokine = mylfq_input[mylfq_input$gene.name %in% lfq_gsc_cytokine,]
+
+cytokine_sharedproteins = intersect(intersect_cytokine$gene.name, intersect_lfq_cytokine$gene.name)
+
+#### neutrophil-mediated immunity
+gsc_neutrophil = c(lab_gsaBP$gsc$`neutrophil mediated immunity (GO:0002446)`)
+intersect_neutrophil = mylab_inputFDR10[mylab_inputFDR10$gene.name %in% gsc_neutrophil,]
+
+lfq_gsc_neutrophil= c(lfq_gsaBP$gsc$`neutrophil mediated immunity (GO:0002446)`)
+intersect_lfq_neutrophil = mylfq_input[mylfq_input$gene.name %in% lfq_gsc_cytokine,]
+
+neutrophil_sharedproteins = intersect(intersect_neutrophil$gene.name, intersect_lfq_neutrophil$gene.name)
+
+
+#### cellular respiration
+gsc_mito = c(lab_gsaBP$gsc$`respiratory electron transport chain (GO:0022904)`)
+intersect_mito = mylab_inputFDR10[mylab_inputFDR10$gene.name %in% gsc_mito,]
+
+lfq_gsc_mito = c(lfq_gsaBP$gsc$`respiratory electron transport chain (GO:0022904)`)
+intersect_lfq_mito = mylfq_input[mylfq_input$gene.name %in% lfq_gsc_mito,]
+
+mito_sharedproteins = intersect(intersect_mito$gene.name, intersect_lfq_mito$gene.name)
+
+#### ECM ogranization
+gsc_ecm = c(lab_gsaBP$gsc$`extracellular matrix organization (GO:0030198)`)
+intersect_ecm = mylab_inputFDR10[mylab_inputFDR10$gene.name %in% gsc_ecm,]
+
+lfq_gsc_ecm = c(lfq_gsaBP$gsc$`extracellular matrix organization (GO:0030198)`)
+intersect_lfq_ecm = mylfq_input[mylfq_input$gene.name %in% lfq_gsc_ecm,]
+
+ecm_sharedproteins = intersect(intersect_ecm$gene.name, intersect_lfq_ecm$gene.name)
+
+#### KEGG, SVcycle
+gsc_SVcycle = c(lab_gsaKegg$gsc$`Synaptic vesicle cycle`)
+intersect_SVcycle = mylab_inputFDR10[mylab_inputFDR10$gene.name %in% gsc_SVcycle,]
+
+lfq_gsc_SVcycle = c(lfq_gsaKegg$gsc$`Synaptic vesicle cycle`)
+intersect_lfq_SVcycle = mylfq_input[mylfq_input$gene.name %in% lfq_gsc_SVcycle,]
+
+SVcycle_sharedproteins = intersect(intersect_SVcycle$gene.name, intersect_lfq_SVcycle$gene.name)
+
+#### KEGG, Oxidative phospho
+gsc_oxphos = c(lab_gsaKegg$gsc$`Oxidative phosphorylation`)
+intersect_oxphos = mylab_inputFDR10[mylab_inputFDR10$gene.name %in% gsc_oxphos,]
+
+lfq_gsc_oxphos = c(lfq_gsaKegg$gsc$`Oxidative phosphorylation`)
+intersect_lfq_oxphos = mylfq_input[mylfq_input$gene.name %in% lfq_gsc_oxphos,]
+
+oxphos_sharedproteins = intersect(intersect_oxphos$gene.name, intersect_lfq_oxphos$gene.name)
+```
+
+# Session info
+```{r}
+sessionInfo()
+```
