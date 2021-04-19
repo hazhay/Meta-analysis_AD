@@ -1,0 +1,27 @@
+channels:
+- conda-forge
+- bioconda
+- anaconda
+- r
+- rdonnelly
+- defaults
+
+dependencies:
+### R
+- r-base=4.0.1
+- rstudio=1.2.5033
+
+### packages
+- r-ggplot2=3.3.3
+- r-ggforce=0.3.2
+- r-venndiagram=1.6.20
+- r-ggpubr=0.4.0
+- r-dplyr=1.0.2
+- r-reshape2=1.4.4
+- r-meta=4.15-1
+- r-metafor=2.4-0
+- r-gridextra=2.3
+- r-pheatmap=1.0.12
+- r-factoextra=1.0.7
+- bioconductor-piano=2.4.0
+- bioconductor-pathview=1.28.1
